@@ -1,28 +1,8 @@
-// /// A struct representing a passive circuit. It relies on a flow graph where
-// ///  - source vertices are annotated with a voltage
-// ///  - edges are annotated with a weight equal to the conductance of the
-// /// component (reciprocal of resistance).
-// struct Circuit {
-//     // Graph doesn't exist, it's just a placeholder for now
-//     graph: Graph,
-// }
-
-// impl Circuit {
-//     /// Create a new circuit
-//     fn new() {}
-
-//     /// Solve for the current through and voltage across each of the circuit's
-//     /// resistors.
-//     fn solve() {}
-
-//     /// Get the source nodes from the graph
-//     fn get_sources() {}
-// }
 
 mod circuit_graph {
     use std::collections::HashMap;
 
-    use petgraph::{prelude::*, data::Build, graph::Node};
+    use petgraph::prelude::*;
 
     #[derive(PartialEq, Eq)]
     pub enum VertexType {
@@ -59,6 +39,11 @@ mod circuit_graph {
         }
     }
 
+    /// A struct representing a passive circuit. It relies on a flow graph where
+    ///  - vertices are annotated with a `VertexType`
+    ///  - vertices are annotated with a voltage
+    ///  - edges are annotated with a weight equal to the conductance of the
+    /// component (reciprocal of resistance).
     pub struct Circuit<T> {
         pub graph: DiGraph<VertexMetadata<T>, EdgeMetadata<T>>,
     }
@@ -83,16 +68,14 @@ mod circuit_graph {
                 );
             }
 
-
-            Circuit { graph }
+            Self { graph }
         }
     }
 }
 
+
 #[cfg(test)]
 mod test {
-    use petgraph::visit::IntoNodeIdentifiers;
-
     use crate::circuit_graph::*;
 
     #[test]
@@ -126,22 +109,33 @@ mod test {
     }
 
     /// Setup a simple circuit:
+    /// 
+    /// ```raw
     /// ----------------
     /// |              |
     /// |             | |
-    /// V ^           |R|
+    /// V             |R|
     /// |             | |
     /// |              |
     /// ----------------
-    fn create_simple_circuit() {
-        todo!()
+    /// ```
+    fn create_simple_circuit(source_voltage: f64, resistance: f64) -> Circuit<f64> {
+        let source = VertexMetadata::new(source_voltage, 0, VertexType::Source);
+        let sink = VertexMetadata::new(0.0, 1, VertexType::Sink);
+
+        let edge = EdgeMetadata::new(0, 1, 1.0 / resistance);
+
+        Circuit::new(vec![source, sink], vec![edge])
     }
 
     /// Test that the circuit was set up properly in that the voltage of the
     /// voltage source was set to the correct value.
     #[test]
     fn check_simple_voltage_source() {
-        todo!()
+        let circuit = create_simple_circuit(5.0, 4.0);
+
+        let source = circuit.graph.node_weights().find(|v| {v.vertex_type == VertexType::Source}).unwrap();
+        assert!(source.voltage == 5.0);
     }
 
     /// Test that the resistance of the resistor was set to the correct value.
@@ -163,6 +157,8 @@ mod test {
     }
 
     /// Setup a slightly more complex circuit:
+    /// 
+    /// ```raw
     ///     __ __
     /// ----__R__---------------
     /// |          |           |
@@ -171,6 +167,7 @@ mod test {
     /// |         | |         | |
     /// |          |           |
     /// ------------------------
+    /// ```
     fn create_complex_circuit() {
         todo!()
     }
@@ -195,7 +192,7 @@ mod test {
 
     /// Test that the solved voltage drop across each resistor is correct.
     #[test]
-    fn complex_solved_voltages() {
+    fn test_complex_solved_voltages() {
         todo!()
     }
 }
