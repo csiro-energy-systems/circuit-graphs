@@ -1,4 +1,3 @@
-
 mod circuit_graph {
     use std::collections::HashMap;
 
@@ -35,12 +34,16 @@ mod circuit_graph {
 
     impl<T> EdgeMetadata<T> {
         pub fn new(tail: u32, head: u32, conductance: T) -> Self {
-            Self { tail, head, conductance }
+            Self {
+                tail,
+                head,
+                conductance,
+            }
         }
     }
 
     /// A struct representing a passive circuit. It relies on a flow graph where
-    ///  - vertices are annotated with a `VertexType`
+    ///  - vertices are annotated with a [`VertexType`]
     ///  - vertices are annotated with a voltage
     ///  - edges are annotated with a weight equal to the conductance of the
     /// component (reciprocal of resistance).
@@ -53,7 +56,7 @@ mod circuit_graph {
             let mut graph: DiGraph<VertexMetadata<T>, EdgeMetadata<T>> = DiGraph::new();
 
             let mut vertex_indices: HashMap<u32, NodeIndex> = HashMap::new();
-            
+
             for vertex in vertices {
                 let tag = vertex.tag.clone();
                 let node_index = graph.add_node(vertex);
@@ -64,15 +67,28 @@ mod circuit_graph {
                 graph.add_edge(
                     *vertex_indices.get(&edge.tail).unwrap(),
                     *vertex_indices.get(&edge.head).unwrap(),
-                    edge
+                    edge,
                 );
             }
 
             Self { graph }
         }
+
+        /// Count the number of unknown currents that need to be found when solving.
+        pub fn count_unknown_currents(&self) -> usize {
+            self.graph.edge_count()
+        }
+
+        /// Count the number of unknown voltages that need to be found when solving.
+        pub fn count_unknown_voltages(&self) -> usize {
+            self
+                .graph
+                .node_weights()
+                .filter(|v| v.vertex_type == VertexType::Internal)
+                .count()
+        }
     }
 }
-
 
 #[cfg(test)]
 mod test {
@@ -109,7 +125,7 @@ mod test {
     }
 
     /// Setup a simple circuit:
-    /// 
+    ///
     /// ```raw
     /// ----------------
     /// |              |
@@ -134,7 +150,11 @@ mod test {
     fn check_simple_voltage_source() {
         let circuit = create_simple_circuit(5.0, 4.0);
 
-        let source = circuit.graph.node_weights().find(|v| {v.vertex_type == VertexType::Source}).unwrap();
+        let source = circuit
+            .graph
+            .node_weights()
+            .find(|v| v.vertex_type == VertexType::Source)
+            .unwrap();
         assert!(source.voltage == 5.0);
     }
 
@@ -157,7 +177,7 @@ mod test {
     }
 
     /// Setup a slightly more complex circuit:
-    /// 
+    ///
     /// ```raw
     ///     __ __
     /// ----__R__---------------
