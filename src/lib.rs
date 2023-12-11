@@ -81,8 +81,7 @@ mod circuit_graph {
 
         /// Count the number of unknown voltages that need to be found when solving.
         pub fn count_unknown_voltages(&self) -> usize {
-            self
-                .graph
+            self.graph
                 .node_weights()
                 .filter(|v| v.vertex_type == VertexType::Internal)
                 .count()
@@ -91,7 +90,7 @@ mod circuit_graph {
 }
 
 #[cfg(test)]
-mod test {
+mod tests {
     use crate::circuit_graph::*;
 
     #[test]
@@ -156,6 +155,15 @@ mod test {
             .find(|v| v.vertex_type == VertexType::Source)
             .unwrap();
         assert!(source.voltage == 5.0);
+    }
+
+    /// Test that the correct number of unknown currents and voltages are being reported.
+    #[test]
+    fn check_simple_num_unknowns() {
+        let circuit = create_simple_circuit(2.0, 8.0);
+
+        assert_eq!(circuit.count_unknown_currents(), 1);
+        assert_eq!(circuit.count_unknown_voltages(), 0);
     }
 
     /// Test that the resistance of the resistor was set to the correct value.
