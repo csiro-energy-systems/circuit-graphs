@@ -212,7 +212,7 @@ mod tests {
         let source = VertexMetadata::new(2.0, 0, VertexType::Source);
 
         let v1 = VertexMetadata::new(-1.0, 1, VertexType::Internal);
-        
+
         let sink = VertexMetadata::new(0.0, 2, VertexType::Sink);
 
         let e1 = EdgeMetadata::new(0, 1, 1.0);
@@ -227,11 +227,16 @@ mod tests {
     fn check_complex_voltage_source() {
         let circuit = create_complex_circuit();
 
-        let source = circuit.graph.node_weights().find(|v| v.vertex_type == VertexType::Source).unwrap();
+        let source = circuit
+            .graph
+            .node_weights()
+            .find(|v| v.vertex_type == VertexType::Source)
+            .unwrap();
 
         assert_eq!(source.voltage, 2.0);
     }
 
+    /// Test that the correct number of unknowns are reported.
     #[test]
     fn check_complex_num_unknowns() {
         let circuit = create_complex_circuit();
@@ -256,5 +261,42 @@ mod tests {
     #[test]
     fn test_complex_solved_voltages() {
         todo!()
+    }
+
+    /// Setup a more complex circuit with series components
+    ///
+    /// ```raw
+    ///     __ __       __ __
+    /// ----__R__-------__R__---
+    /// |          |           |
+    /// |+        | |         | |
+    /// V         |R|         |R|
+    /// |-        | |         | |
+    /// |          |           |
+    /// ------------------------
+    /// ```
+    fn create_series_circuit() -> Circuit<f64> {
+        let source = VertexMetadata::new(2.0, 0, VertexType::Source);
+
+        let v1 = VertexMetadata::new(-1.0, 1, VertexType::Internal);
+        let v2 = VertexMetadata::new(-1.0, 2, VertexType::Internal);
+
+        let sink = VertexMetadata::new(0.0, 3, VertexType::Sink);
+
+        let e1 = EdgeMetadata::new(0, 1, 1.0);
+        let e2 = EdgeMetadata::new(1, 3, 1.0);
+        let e3 = EdgeMetadata::new(1, 2, 2.0);
+        let e4 = EdgeMetadata::new(2, 3, 0.5);
+
+        Circuit::new(vec![source, v1, v2, sink], vec![e1, e2, e3, e4])
+    }
+
+    /// Test that the correct number of unknowns are being reported.
+    #[test]
+    fn check_series_num_unknowns() {
+        let circuit = create_series_circuit();
+
+        assert_eq!(circuit.count_unknown_currents(), 3);
+        assert_eq!(circuit.count_unknown_voltages(), 2);
     }
 }
