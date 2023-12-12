@@ -76,7 +76,19 @@ mod circuit_graph {
 
         /// Count the number of unknown currents that need to be found when solving.
         pub fn count_unknown_currents(&self) -> usize {
+            // This method uses the fact that every edge of the graph corresponds to a
+            // resistor whose current we want to find, but that resistors in series (which
+            // can be uniquely associated with vertices having deg_in = deg_out = 1)
+            // need to be uncounted since any group all share the same current.
             self.graph.edge_count()
+                - self
+                    .graph
+                    .node_indices()
+                    .filter(|index| {
+                        self.graph.neighbors_directed(*index, Incoming).count() == 1
+                            && self.graph.neighbors_directed(*index, Outgoing).count() == 1
+                    })
+                    .count()
         }
 
         /// Count the number of unknown voltages that need to be found when solving.
@@ -128,9 +140,9 @@ mod tests {
     /// ```raw
     /// ----------------
     /// |              |
-    /// |             | |
+    /// |+            | |
     /// V             |R|
-    /// |             | |
+    /// |-            | |
     /// |              |
     /// ----------------
     /// ```
@@ -190,20 +202,42 @@ mod tests {
     ///     __ __
     /// ----__R__---------------
     /// |          |           |
-    /// |         | |         | |
+    /// |+        | |         | |
     /// V         |R|         |R|
-    /// |         | |         | |
+    /// |-        | |         | |
     /// |          |           |
     /// ------------------------
     /// ```
-    fn create_complex_circuit() {
-        todo!()
+    fn create_complex_circuit() -> Circuit<f64> {
+        let source = VertexMetadata::new(2.0, 0, VertexType::Source);
+
+        let v1 = VertexMetadata::new(-1.0, 1, VertexType::Internal);
+        
+        let sink = VertexMetadata::new(0.0, 2, VertexType::Sink);
+
+        let e1 = EdgeMetadata::new(0, 1, 1.0);
+        let e2 = EdgeMetadata::new(1, 2, 1.0);
+        let e3 = EdgeMetadata::new(1, 2, 2.0);
+
+        Circuit::new(vec![source, v1, sink], vec![e1, e2, e3])
     }
 
     /// Test that the circuit's voltage source was set to the correct value.
     #[test]
     fn check_complex_voltage_source() {
-        todo!()
+        let circuit = create_complex_circuit();
+
+        let source = circuit.graph.node_weights().find(|v| v.vertex_type == VertexType::Source).unwrap();
+
+        assert_eq!(source.voltage, 2.0);
+    }
+
+    #[test]
+    fn check_complex_num_unknowns() {
+        let circuit = create_complex_circuit();
+
+        assert_eq!(circuit.count_unknown_currents(), 3);
+        assert_eq!(circuit.count_unknown_voltages(), 1);
     }
 
     /// Test that the resistances of the circuit's resistors were set correctly.
