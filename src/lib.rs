@@ -93,6 +93,8 @@ mod circuit_graph {
 
         /// Count the number of unknown voltages that need to be found when solving.
         pub fn count_unknown_voltages(&self) -> usize {
+            // Here we simply count the number of vertices with vertex_type Internal; sinks
+            // and sources have their voltage predetermined.
             self.graph
                 .node_weights()
                 .filter(|v| v.vertex_type == VertexType::Internal)
