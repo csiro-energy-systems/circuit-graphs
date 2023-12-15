@@ -1,4 +1,4 @@
-mod circuit_graph {
+pub mod circuit_graph {
     use std::collections::HashMap;
 
     use petgraph::prelude::*;
@@ -99,6 +99,54 @@ mod circuit_graph {
                 .node_weights()
                 .filter(|v| v.vertex_type == VertexType::Internal)
                 .count()
+        }
+
+        pub fn find_paths(&self) -> Vec<Vec<EdgeIndex>> {
+            let source_index = self
+                .graph
+                .node_indices()
+                .find(|n| self.graph.node_weight(*n).unwrap().vertex_type == VertexType::Source)
+                .unwrap();
+            let sink_index = self
+                .graph
+                .node_indices()
+                .find(|n| self.graph.node_weight(*n).unwrap().vertex_type == VertexType::Sink)
+                .unwrap();
+
+            let mut paths: Vec<Vec<EdgeIndex>> = Vec::new();
+            let mut visited: Vec<EdgeIndex> = Vec::new();
+            let mut visited_nodes: Vec<NodeIndex> = Vec::new();
+
+            let mut stack: Vec<_> = vec![self.graph.edges_directed(source_index, Outgoing)];
+
+            if source_index == sink_index {
+                return paths;
+            }
+
+            while !stack.is_empty() {
+                // Will never error since we know stack isn't empty
+                let edge_iter = stack.last_mut().unwrap();
+                match edge_iter.next() {
+                    Some(next_edge) => {
+                        if next_edge.target() == sink_index {
+                            let mut new_path = visited.clone();
+                            new_path.push(next_edge.id());
+                            paths.push(new_path);
+                        } else if !visited_nodes.contains(&next_edge.target()) {
+                            visited.push(next_edge.id());
+                            visited_nodes.push(next_edge.source());
+                            stack.push(self.graph.edges_directed(next_edge.target(), Outgoing));
+                        }
+                    }
+                    None => {
+                        stack.pop();
+                        visited.pop();
+                        visited_nodes.pop();
+                    }
+                }
+            }
+
+            paths
         }
     }
 }
