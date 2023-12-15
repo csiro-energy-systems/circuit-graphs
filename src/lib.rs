@@ -1,5 +1,5 @@
 pub mod circuit_graph {
-    use std::collections::HashMap;
+    use std::{collections::HashMap, io::sink};
 
     use petgraph::prelude::*;
 
@@ -101,23 +101,33 @@ pub mod circuit_graph {
                 .count()
         }
 
+        /// Find the sequences of edges which form source->sink paths within the circuit.
         pub fn find_paths(&self) -> Vec<Vec<EdgeIndex>> {
-            let source_index = self
-                .graph
-                .node_indices()
-                .find(|n| self.graph.node_weight(*n).unwrap().vertex_type == VertexType::Source)
-                .unwrap();
-            let sink_index = self
-                .graph
-                .node_indices()
-                .find(|n| self.graph.node_weight(*n).unwrap().vertex_type == VertexType::Sink)
-                .unwrap();
+            let source_indices: Vec<NodeIndex> = self.graph.externals(Incoming).collect();
+            let sink_indices: Vec<NodeIndex> = self.graph.externals(Outgoing).collect();
 
             let mut paths: Vec<Vec<EdgeIndex>> = Vec::new();
-            let mut visited: Vec<EdgeIndex> = Vec::new();
+
+            for source_index in &source_indices {
+                for sink_index in &sink_indices {
+                    paths.append(&mut self.find_paths_between(&source_index, &sink_index));
+                }
+            }
+
+            paths
+        }
+
+        /// Finds, as sequences of edges, all the paths between a given source and sink node.
+        fn find_paths_between(
+            &self,
+            source_index: &NodeIndex,
+            sink_index: &NodeIndex,
+        ) -> Vec<Vec<EdgeIndex>> {
+            let mut paths: Vec<Vec<EdgeIndex>> = Vec::new();
+            let mut visited_edges: Vec<EdgeIndex> = Vec::new();
             let mut visited_nodes: Vec<NodeIndex> = Vec::new();
 
-            let mut stack: Vec<_> = vec![self.graph.edges_directed(source_index, Outgoing)];
+            let mut stack: Vec<_> = vec![self.graph.edges_directed(*source_index, Outgoing)];
 
             if source_index == sink_index {
                 return paths;
@@ -128,19 +138,19 @@ pub mod circuit_graph {
                 let edge_iter = stack.last_mut().unwrap();
                 match edge_iter.next() {
                     Some(next_edge) => {
-                        if next_edge.target() == sink_index {
-                            let mut new_path = visited.clone();
+                        if next_edge.target() == *sink_index {
+                            let mut new_path = visited_edges.clone();
                             new_path.push(next_edge.id());
                             paths.push(new_path);
                         } else if !visited_nodes.contains(&next_edge.target()) {
-                            visited.push(next_edge.id());
+                            visited_edges.push(next_edge.id());
                             visited_nodes.push(next_edge.source());
                             stack.push(self.graph.edges_directed(next_edge.target(), Outgoing));
                         }
                     }
                     None => {
                         stack.pop();
-                        visited.pop();
+                        visited_edges.pop();
                         visited_nodes.pop();
                     }
                 }
@@ -185,7 +195,7 @@ mod tests {
         assert!(circuit.graph.node_count() == 2);
     }
 
-    /// Setup a simple circuit:
+    /// Set up a simple circuit:
     ///
     /// ```raw
     /// ----------------
@@ -254,7 +264,7 @@ mod tests {
         todo!()
     }
 
-    /// Setup a slightly more complex circuit:
+    /// Set up a slightly more complex circuit:
     ///
     /// ```raw
     ///     __ __
@@ -329,7 +339,7 @@ mod tests {
         todo!()
     }
 
-    /// Setup a more complex circuit with series components
+    /// Set up a more complex circuit with series components
     ///
     /// ```raw
     ///     __ __       __ __
