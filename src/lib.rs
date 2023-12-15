@@ -228,6 +228,14 @@ mod tests {
         assert_eq!(circuit.count_unknown_voltages(), 0);
     }
 
+    /// Test that the correct number of paths are found.
+    #[test]
+    fn check_simple_num_paths() {
+        let circuit = create_simple_circuit(3.0, 2.0);
+
+        assert_eq!(circuit.find_paths().len(), 1);
+    }
+
     /// Test that the resistance of the resistor was set to the correct value.
     #[test]
     fn check_simple_resistance() {
@@ -295,6 +303,14 @@ mod tests {
         assert_eq!(circuit.count_unknown_voltages(), 1);
     }
 
+    /// Test that the correct number of paths are found.
+    #[test]
+    fn check_complex_num_paths() {
+        let circuit = create_complex_circuit();
+
+        assert_eq!(circuit.find_paths().len(), 2);
+    }
+
     /// Test that the resistances of the circuit's resistors were set correctly.
     #[test]
     fn check_complex_resistances() {
@@ -348,5 +364,13 @@ mod tests {
 
         assert_eq!(circuit.count_unknown_currents(), 3);
         assert_eq!(circuit.count_unknown_voltages(), 2);
+    }
+
+    /// Test that the correct number of paths are found.
+    #[test]
+    fn check_series_num_paths() {
+        let circuit = create_series_circuit();
+
+        assert_eq!(circuit.find_paths().len(), 2);
     }
 }
