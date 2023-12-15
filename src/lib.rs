@@ -1,5 +1,5 @@
 pub mod circuit_graph {
-    use std::{collections::HashMap, io::sink};
+    use std::collections::HashMap;
 
     use petgraph::prelude::*;
 
@@ -163,6 +163,8 @@ pub mod circuit_graph {
 
 #[cfg(test)]
 mod tests {
+    use petgraph::graph::Edge;
+
     use crate::circuit_graph::*;
 
     #[test]
@@ -382,5 +384,60 @@ mod tests {
         let circuit = create_series_circuit();
 
         assert_eq!(circuit.find_paths().len(), 2);
+    }
+
+    /// Set up a circuit with multiple source and sink nodes.
+    ///
+    /// ```raw
+    ///
+    /// -------__R__--------------__R__-------
+    /// |                  |                 |
+    /// |                 | |                |
+    /// |+                |R|               | |
+    /// |V                | |               |R|
+    /// |-                 |                | |
+    /// |     ----__R__---------__R__---     |
+    /// |     |            |           |     |
+    /// |     |+           |           |     |
+    /// |     |V           |          | |    |
+    /// |     |-           |          |R|    |
+    /// |     |            |          | |    |
+    /// |     ----__R__-----           |     |
+    /// |                              |     |
+    /// --------------------------------------
+    /// ```
+    fn create_multiple_source_circuit() -> Circuit<f64> {
+        let source1 = VertexMetadata::new(2.0, 0, VertexType::Source);
+        let source2 = VertexMetadata::new(1.5, 1, VertexType::Source);
+
+        let v1 = VertexMetadata::new(-1.0, 2, VertexType::Internal);
+        let v2 = VertexMetadata::new(-1.0, 3, VertexType::Internal);
+        let v3 = VertexMetadata::new(-1.0, 4, VertexType::Internal);
+        let v4 = VertexMetadata::new(-1.0, 5, VertexType::Internal);
+
+        let sink1 = VertexMetadata::new(0.0, 6, VertexType::Sink);
+        let sink2 = VertexMetadata::new(0.0, 7, VertexType::Sink);
+
+        let e1 = EdgeMetadata::new(0, 2, 1.0);
+        let e2 = EdgeMetadata::new(2, 3, 1.0);
+        let e3 = EdgeMetadata::new(3, 6, 1.0);
+        let e4 = EdgeMetadata::new(2, 4, 1.0);
+        let e5 = EdgeMetadata::new(4, 5, 1.0);
+        let e6 = EdgeMetadata::new(5, 6, 1.0);
+        let e7 = EdgeMetadata::new(4, 7, 1.0);
+        let e8 = EdgeMetadata::new(1, 4, 1.0);
+
+        Circuit::new(
+            vec![source1, source2, v1, v2, v3, v4, sink1, sink2],
+            vec![e1, e2, e3, e4, e5, e6, e7, e8],
+        )
+    }
+
+    /// Test that the correct number of paths are found.
+    #[test]
+    fn check_multiple_num_paths() {
+        let circuit = create_multiple_source_circuit();
+
+        assert_eq!(circuit.find_paths().len(), 5);
     }
 }
