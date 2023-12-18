@@ -1,6 +1,9 @@
 pub mod circuit_graph {
     use std::collections::HashMap;
 
+    use faer::solvers::{FullPivLu, SolverCore};
+    use faer::Mat;
+    use faer_entity::ComplexField;
     use petgraph::prelude::*;
 
     #[derive(PartialEq, Eq)]
@@ -85,8 +88,8 @@ pub mod circuit_graph {
                     .graph
                     .node_indices()
                     .filter(|index| {
-                        self.graph.neighbors_directed(*index, Incoming).count() == 1
-                            && self.graph.neighbors_directed(*index, Outgoing).count() == 1
+                        self.graph.edges_directed(*index, Incoming).count() == 1
+                            && self.graph.edges_directed(*index, Outgoing).count() == 1
                     })
                     .count()
         }
@@ -102,11 +105,11 @@ pub mod circuit_graph {
         }
 
         /// Find the sequences of edges which form source->sink paths within the circuit.
-        pub fn find_paths(&self) -> Vec<Vec<EdgeIndex>> {
+        pub fn find_paths(&self) -> Vec<(NodeIndex, Vec<EdgeIndex>)> {
             let source_indices: Vec<NodeIndex> = self.graph.externals(Incoming).collect();
             let sink_indices: Vec<NodeIndex> = self.graph.externals(Outgoing).collect();
 
-            let mut paths: Vec<Vec<EdgeIndex>> = Vec::new();
+            let mut paths: Vec<(NodeIndex, Vec<EdgeIndex>)> = Vec::new();
 
             for source_index in &source_indices {
                 for sink_index in &sink_indices {
@@ -122,8 +125,8 @@ pub mod circuit_graph {
             &self,
             source_index: &NodeIndex,
             sink_index: &NodeIndex,
-        ) -> Vec<Vec<EdgeIndex>> {
-            let mut paths: Vec<Vec<EdgeIndex>> = Vec::new();
+        ) -> Vec<(NodeIndex, Vec<EdgeIndex>)> {
+            let mut paths: Vec<(NodeIndex, Vec<EdgeIndex>)> = Vec::new();
             let mut visited_edges: Vec<EdgeIndex> = Vec::new();
             let mut visited_nodes: Vec<NodeIndex> = Vec::new();
 
@@ -141,7 +144,7 @@ pub mod circuit_graph {
                         if next_edge.target() == *sink_index {
                             let mut new_path = visited_edges.clone();
                             new_path.push(next_edge.id());
-                            paths.push(new_path);
+                            paths.push((source_index.clone(), new_path));
                         } else if !visited_nodes.contains(&next_edge.target()) {
                             visited_edges.push(next_edge.id());
                             visited_nodes.push(next_edge.source());
@@ -159,12 +162,67 @@ pub mod circuit_graph {
             paths
         }
     }
+
+    impl<T: ComplexField> Circuit<T> {
+        /// Solve current values
+        pub fn solve_currents(&self) {
+            let num_unkowns = self.count_unknown_currents();
+
+            let mut coeffs: Mat<T> = Mat::zeros(num_unkowns, num_unkowns);
+            let mut voltages: Mat<T> = Mat::zeros(num_unkowns, 1);
+
+            let paths = self.find_paths();
+            let num_paths = paths.len();
+
+            // Begin by establishing equations for the current drop along every source->sink
+            // path
+            for (i, path) in paths.iter().enumerate() {
+                voltages.write(i, 0, self.graph.node_weight(path.0).unwrap().voltage);
+
+                for edge_index in &path.1 {
+                    let edge = self.graph.edge_weight(*edge_index).unwrap();
+                    coeffs.write(i, edge_index.index(), edge.conductance.faer_inv());
+                }
+            }
+
+            // Now find internal vertices which bus multiple branches
+            let indices: Vec<NodeIndex> = self
+                .graph
+                .node_indices()
+                .filter(|index| {
+                    self.graph.node_weight(*index).unwrap().vertex_type == VertexType::Internal
+                        && (self.graph.edges_directed(*index, Incoming).count() != 1
+                            || self.graph.edges_directed(*index, Outgoing).count() != 1)
+                })
+                .collect();
+
+            // For each of these vertices, create an equation from the fact that current
+            // cannot pool anywhere, whatever enters a node must also leave.
+            for (i, node_index) in (num_paths..num_unkowns).zip(indices) {
+                // Place a +1 coefficient on each incoming current
+                for edge_ref in self.graph.edges_directed(node_index, Incoming) {
+                    coeffs.write(i, edge_ref.id().index(), T::faer_one());
+                }
+                // Place a -1 coefficient on each outgoing current
+                for edge_ref in self.graph.edges_directed(node_index, Outgoing) {
+                    coeffs.write(i, edge_ref.id().index(), T::faer_one().faer_neg());
+                }
+            }
+
+            println!("coeffs: \n {:#?} \n voltages: \n {:#?}", coeffs, voltages);
+
+            let solver = FullPivLu::new(coeffs.as_ref());
+            let inverse = solver.inverse();
+
+            let result = inverse * voltages;
+
+            println!("result: {:#?}", result);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use petgraph::graph::Edge;
-
     use crate::circuit_graph::*;
 
     #[test]
