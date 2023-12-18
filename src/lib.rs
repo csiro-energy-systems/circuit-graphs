@@ -1,5 +1,5 @@
 pub mod circuit_graph {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     use faer::solvers::{FullPivLu, SolverCore};
     use faer::Mat;
@@ -217,6 +217,87 @@ pub mod circuit_graph {
             let result = inverse * voltages;
 
             println!("result: {:#?}", result);
+        }
+    }
+
+    /// A struct to hold the functionality for determining sets of edges in series
+    /// which will share current. This way we can figure out a mapping from edge
+    /// index to current value.
+    struct SeriesSets {
+        pub sets: Vec<HashSet<EdgeIndex>>,
+    }
+
+    impl SeriesSets {
+        pub fn new<T>(circuit: &Circuit<T>) -> Self {
+            let mut new = Self { sets: Vec::new() };
+
+            // Essentially don't bother with the hard bit if we don't need to
+            if circuit.count_unknown_currents() == circuit.graph.edge_count() {
+                for edge_index in circuit.graph.edge_indices() {
+                    new.insert(edge_index);
+                }
+
+                return new;
+            }
+
+            let indices = circuit.graph.node_indices().filter(|index| {
+                circuit.graph.edges_directed(*index, Incoming).count() == 1
+                    && circuit.graph.edges_directed(*index, Outgoing).count() == 1
+            });
+
+            for node_index in indices {
+                // We know because of that filter above that there will be exactly one
+                // result in the iterator, so the unwrap is safe.
+                let incoming_edge = circuit
+                    .graph
+                    .edges_directed(node_index, Incoming)
+                    .next()
+                    .unwrap()
+                    .id();
+                let outgoing_edge = circuit
+                    .graph
+                    .edges_directed(node_index, Outgoing)
+                    .next()
+                    .unwrap()
+                    .id();
+                new.insert_series_pair(incoming_edge, outgoing_edge);
+            }
+
+            for edge_index in circuit.graph.edge_indices() {
+                new.insert(edge_index);
+            }
+
+            new
+        }
+
+        fn insert(&mut self, edge_index: EdgeIndex) {
+            // If the edge is already somewhere in here, do nothing.
+            if self.sets.iter().any(|set| set.contains(&edge_index)) {
+                return;
+            }
+
+            // Otherwise, insert in a new HashSet.
+            let mut new_set = HashSet::new();
+            new_set.insert(edge_index);
+            self.sets.push(new_set);
+        }
+
+        fn insert_series_pair(&mut self, edge: EdgeIndex, other_edge: EdgeIndex) {
+            // .find() is okay here since there will only ever be exactly one HashSet that
+            // contains any given edge.
+            if let Some(set) = self
+                .sets
+                .iter_mut()
+                .find(|set| set.contains(&edge) || set.contains(&other_edge))
+            {
+                set.insert(edge);
+                set.insert(other_edge);
+            } else {
+                let mut new_set = HashSet::new();
+                new_set.insert(edge);
+                new_set.insert(other_edge);
+                self.sets.push(new_set);
+            }
         }
     }
 }
