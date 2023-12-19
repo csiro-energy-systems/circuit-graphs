@@ -121,6 +121,7 @@ pub mod circuit_graph {
         }
 
         /// Finds, as sequences of edges, all the paths between a given source and sink node.
+        /// Also returns the source node as a convenience.
         fn find_paths_between(
             &self,
             source_index: &NodeIndex,
@@ -163,10 +164,11 @@ pub mod circuit_graph {
         }
     }
 
-    impl<T: ComplexField> Circuit<T> {
+    impl<T: ComplexField + std::ops::Add<Output = T>> Circuit<T> {
         /// Solve current values
-        pub fn solve_currents(&self) {
+        pub fn solve_currents(&self) -> Vec<(HashSet<EdgeIndex>, T)> {
             let num_unkowns = self.count_unknown_currents();
+            let series_sets = SeriesSets::new(self);
 
             let mut coeffs: Mat<T> = Mat::zeros(num_unkowns, num_unkowns);
             let mut voltages: Mat<T> = Mat::zeros(num_unkowns, 1);
@@ -181,7 +183,10 @@ pub mod circuit_graph {
 
                 for edge_index in &path.1 {
                     let edge = self.graph.edge_weight(*edge_index).unwrap();
-                    coeffs.write(i, edge_index.index(), edge.conductance.faer_inv());
+                    let set_index = series_sets.get_edge_index(*edge_index).unwrap();
+                    // Add on this edge's contribution to what's there, it might be in series
+                    let current_val = coeffs.read(i, set_index);
+                    coeffs.write(i, set_index, edge.conductance.faer_inv() + current_val);
                 }
             }
 
@@ -201,22 +206,29 @@ pub mod circuit_graph {
             for (i, node_index) in (num_paths..num_unkowns).zip(indices) {
                 // Place a +1 coefficient on each incoming current
                 for edge_ref in self.graph.edges_directed(node_index, Incoming) {
-                    coeffs.write(i, edge_ref.id().index(), T::faer_one());
+                    let set_index = series_sets.get_edge_index(edge_ref.id()).unwrap();
+                    coeffs.write(i, set_index, T::faer_one());
                 }
                 // Place a -1 coefficient on each outgoing current
                 for edge_ref in self.graph.edges_directed(node_index, Outgoing) {
-                    coeffs.write(i, edge_ref.id().index(), T::faer_one().faer_neg());
+                    let set_index = series_sets.get_edge_index(edge_ref.id()).unwrap();
+                    coeffs.write(i, set_index, T::faer_one().faer_neg());
                 }
             }
 
-            println!("coeffs: \n {:#?} \n voltages: \n {:#?}", coeffs, voltages);
-
+            // Solve the system of equations
             let solver = FullPivLu::new(coeffs.as_ref());
             let inverse = solver.inverse();
 
             let result = inverse * voltages;
 
-            println!("result: {:#?}", result);
+            let mut output = Vec::new();
+
+            for (index, set) in series_sets.sets.iter().enumerate() {
+                output.push((set.clone(), result.read(index, 0)));
+            }
+
+            output
         }
     }
 
@@ -228,6 +240,7 @@ pub mod circuit_graph {
     }
 
     impl SeriesSets {
+        /// Create a [`SeriesSets`] from a [`Circuit`].
         pub fn new<T>(circuit: &Circuit<T>) -> Self {
             let mut new = Self { sets: Vec::new() };
 
@@ -298,6 +311,19 @@ pub mod circuit_graph {
                 new_set.insert(other_edge);
                 self.sets.push(new_set);
             }
+        }
+
+        /// Return the index of the [`HashSet`] in this [`SeriesSet`]'s `sets` which
+        /// contains the given `edge_index`.
+        pub fn get_edge_index(&self, edge_index: EdgeIndex) -> Option<usize> {
+            for (index, set) in self.sets.iter().enumerate() {
+                if set.contains(&edge_index) {
+                    return Some(index)
+                }
+            }
+
+            // If we get here, then edge_index isn't actually in this SeriesSets
+            None
         }
     }
 }
@@ -485,9 +511,9 @@ mod tests {
     /// ```raw
     ///     __ __       __ __
     /// ----__R__-------__R__---
-    /// |          |           |
+    /// |   1ohm   |    0.5ohm |
     /// |+        | |         | |
-    /// V         |R|         |R|
+    /// V     1ohm|R|     2ohm|R|
     /// |-        | |         | |
     /// |          |           |
     /// ------------------------
