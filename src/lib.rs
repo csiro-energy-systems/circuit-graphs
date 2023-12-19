@@ -318,7 +318,7 @@ pub mod circuit_graph {
         pub fn get_edge_index(&self, edge_index: EdgeIndex) -> Option<usize> {
             for (index, set) in self.sets.iter().enumerate() {
                 if set.contains(&edge_index) {
-                    return Some(index)
+                    return Some(index);
                 }
             }
 
@@ -373,11 +373,11 @@ mod tests {
     /// |              |
     /// ----------------
     /// ```
-    fn create_simple_circuit(source_voltage: f64, resistance: f64) -> Circuit<f64> {
-        let source = VertexMetadata::new(source_voltage, 0, VertexType::Source);
+    fn create_simple_circuit() -> Circuit<f64> {
+        let source = VertexMetadata::new(3.0, 0, VertexType::Source);
         let sink = VertexMetadata::new(0.0, 1, VertexType::Sink);
 
-        let edge = EdgeMetadata::new(0, 1, 1.0 / resistance);
+        let edge = EdgeMetadata::new(0, 1, 0.5);
 
         Circuit::new(vec![source, sink], vec![edge])
     }
@@ -386,20 +386,20 @@ mod tests {
     /// voltage source was set to the correct value.
     #[test]
     fn check_simple_voltage_source() {
-        let circuit = create_simple_circuit(5.0, 4.0);
+        let circuit = create_simple_circuit();
 
         let source = circuit
             .graph
             .node_weights()
             .find(|v| v.vertex_type == VertexType::Source)
             .unwrap();
-        assert!(source.voltage == 5.0);
+        assert!(source.voltage == 3.0);
     }
 
     /// Test that the correct number of unknown currents and voltages are being reported.
     #[test]
     fn check_simple_num_unknowns() {
-        let circuit = create_simple_circuit(2.0, 8.0);
+        let circuit = create_simple_circuit();
 
         assert_eq!(circuit.count_unknown_currents(), 1);
         assert_eq!(circuit.count_unknown_voltages(), 0);
@@ -408,21 +408,20 @@ mod tests {
     /// Test that the correct number of paths are found.
     #[test]
     fn check_simple_num_paths() {
-        let circuit = create_simple_circuit(3.0, 2.0);
+        let circuit = create_simple_circuit();
 
         assert_eq!(circuit.find_paths().len(), 1);
-    }
-
-    /// Test that the resistance of the resistor was set to the correct value.
-    #[test]
-    fn check_simple_resistance() {
-        todo!()
     }
 
     /// Test that the solved current value through the resistor is correct.
     #[test]
     fn test_simple_solved_current() {
-        todo!()
+        let circuit = create_simple_circuit();
+
+        let solved_currents = circuit.solve_currents();
+
+        assert_eq!(solved_currents.len(), 1);
+        assert!(solved_currents[0].1 - 1.5 < 1e-10);
     }
 
     /// Test that the solved voltage drop across the resistor is correct.
@@ -436,9 +435,9 @@ mod tests {
     /// ```raw
     ///     __ __
     /// ----__R__---------------
-    /// |          |           |
+    /// |   1ohm   |           |
     /// |+        | |         | |
-    /// V         |R|         |R|
+    /// V 2   1ohm|R|   0.5ohm|R|
     /// |-        | |         | |
     /// |          |           |
     /// ------------------------
@@ -488,16 +487,22 @@ mod tests {
         assert_eq!(circuit.find_paths().len(), 2);
     }
 
-    /// Test that the resistances of the circuit's resistors were set correctly.
-    #[test]
-    fn check_complex_resistances() {
-        todo!()
-    }
-
     /// Test that the solved current value through each resistor is correct.
     #[test]
     fn test_complex_solved_currents() {
-        todo!()
+        let circuit = create_complex_circuit();
+
+        let solved_currents = circuit.solve_currents();
+
+        let mapped_vals: Vec<(usize, f64)> = solved_currents
+            .iter()
+            .map(|tuple| (tuple.0.iter().last().unwrap().index(), tuple.1))
+            .collect();
+
+        assert_eq!(solved_currents.len(), 3);
+        assert!(mapped_vals.iter().find(|tuple| tuple.0 == 0).unwrap().1 - 1.5 < 1e-10);
+        assert!(mapped_vals.iter().find(|tuple| tuple.0 == 1).unwrap().1 - 0.5 < 1e-10);
+        assert!(mapped_vals.iter().find(|tuple| tuple.0 == 2).unwrap().1 - 1.0 < 1e-10);
     }
 
     /// Test that the solved voltage drop across each resistor is correct.
@@ -549,6 +554,25 @@ mod tests {
         let circuit = create_series_circuit();
 
         assert_eq!(circuit.find_paths().len(), 2);
+    }
+
+    /// Test that the correct current values have been found
+    #[test]
+    fn check_series_solved_currents() {
+        let circuit = create_series_circuit();
+
+        let solved_currents = circuit.solve_currents();
+
+        let mapped_vals: Vec<(usize, f64)> = solved_currents
+            .iter()
+            .map(|tuple| (tuple.0.iter().last().unwrap().index(), tuple.1))
+            .collect();
+
+        assert_eq!(solved_currents.len(), 3);
+
+        assert!(mapped_vals.iter().find(|tuple| tuple.0 == 0).unwrap().1 - 7.0 / 6.0 < 1e-10);
+        assert!(mapped_vals.iter().find(|tuple| tuple.0 == 1).unwrap().1 - 5.0 / 6.0 < 1e-10);
+        assert!(mapped_vals.iter().find(|tuple| tuple.0 == 3).unwrap().1 - 1.0 / 3.0 < 1e-10);
     }
 
     /// Set up a circuit with multiple source and sink nodes.
