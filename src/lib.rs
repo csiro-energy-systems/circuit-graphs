@@ -1,5 +1,5 @@
 pub mod circuit_graph {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
 
     use faer::solvers::{FullPivLu, SolverCore};
     use faer::Mat;
@@ -33,6 +33,7 @@ pub mod circuit_graph {
         pub tail: u32,
         pub head: u32,
         pub conductance: T,
+        current_id: Option<usize>,
     }
 
     impl<T> EdgeMetadata<T> {
@@ -41,6 +42,7 @@ pub mod circuit_graph {
                 tail,
                 head,
                 conductance,
+                current_id: None,
             }
         }
     }
@@ -78,20 +80,82 @@ pub mod circuit_graph {
         }
 
         /// Count the number of unknown currents that need to be found when solving.
-        pub fn count_unknown_currents(&self) -> usize {
+        pub fn determine_unknown_currents(&mut self) -> usize {
             // This method uses the fact that every edge of the graph corresponds to a
             // resistor whose current we want to find, but that resistors in series (which
             // can be uniquely associated with vertices having deg_in = deg_out = 1)
             // need to be uncounted since any group all share the same current.
-            self.graph.edge_count()
-                - self
+            let series_nodes: Vec<NodeIndex> = self
+                .graph
+                .node_indices()
+                .filter(|index| {
+                    self.graph.edges_directed(*index, Incoming).count() == 1
+                        && self.graph.edges_directed(*index, Outgoing).count() == 1
+                })
+                .collect();
+
+            let mut next_current_index: usize = 0;
+
+            // Match up series nodes to all have the same current indices.
+            for node_index in &series_nodes {
+                // Note we know these edges exist since we just grabbed them from the graph, so
+                // all the unwrap calls in this for block are safe.
+                let incoming_edge_index = self
                     .graph
-                    .node_indices()
-                    .filter(|index| {
-                        self.graph.edges_directed(*index, Incoming).count() == 1
-                            && self.graph.edges_directed(*index, Outgoing).count() == 1
-                    })
-                    .count()
+                    .edges_directed(*node_index, Incoming)
+                    .last()
+                    .unwrap()
+                    .id();
+                let outgoing_edge_index = self
+                    .graph
+                    .edges_directed(*node_index, Outgoing)
+                    .last()
+                    .unwrap()
+                    .id();
+
+                if let Some(id) = self
+                    .graph
+                    .edge_weight(incoming_edge_index)
+                    .unwrap()
+                    .current_id
+                {
+                    let outgoing_weight = self.graph.edge_weight_mut(outgoing_edge_index).unwrap();
+                    outgoing_weight.current_id = Some(id);
+                } else if let Some(id) = self
+                    .graph
+                    .edge_weight(outgoing_edge_index)
+                    .unwrap()
+                    .current_id
+                {
+                    let incoming_weight = self.graph.edge_weight_mut(incoming_edge_index).unwrap();
+                    incoming_weight.current_id = Some(id);
+                } else {
+                    let incoming_weight = self.graph.edge_weight_mut(incoming_edge_index).unwrap();
+                    incoming_weight.current_id = Some(next_current_index);
+
+                    let outgoing_weight = self.graph.edge_weight_mut(outgoing_edge_index).unwrap();
+                    outgoing_weight.current_id = Some(next_current_index);
+
+                    next_current_index += 1;
+                }
+            }
+
+            // Now that all the series pairs have been added, label every other edge in
+            // increasing order.
+            for edge_weight in self.graph.edge_weights_mut() {
+                if let None = edge_weight.current_id {
+                    edge_weight.current_id = Some(next_current_index);
+                    next_current_index += 1;
+                }
+            }
+
+            println!("{}", next_current_index);
+
+            let out = self.graph.edge_count() - series_nodes.len();
+
+            println!("{}", out);
+
+            return self.graph.edge_count() - series_nodes.len();
         }
 
         /// Count the number of unknown voltages that need to be found when solving.
@@ -166,9 +230,8 @@ pub mod circuit_graph {
 
     impl<T: ComplexField + std::ops::Add<Output = T>> Circuit<T> {
         /// Solve current values
-        pub fn solve_currents(&self) -> Vec<(HashSet<EdgeIndex>, T)> {
-            let num_unkowns = self.count_unknown_currents();
-            let series_sets = SeriesSets::new(self);
+        pub fn solve_currents(&mut self) -> HashMap<usize, T> {
+            let num_unkowns = self.determine_unknown_currents();
 
             let mut coeffs: Mat<T> = Mat::zeros(num_unkowns, num_unkowns);
             let mut voltages: Mat<T> = Mat::zeros(num_unkowns, 1);
@@ -183,10 +246,10 @@ pub mod circuit_graph {
 
                 for edge_index in &path.1 {
                     let edge = self.graph.edge_weight(*edge_index).unwrap();
-                    let set_index = series_sets.get_edge_index(*edge_index).unwrap();
+                    let current_index = edge.current_id.unwrap();
                     // Add on this edge's contribution to what's there, it might be in series
-                    let current_val = coeffs.read(i, set_index);
-                    coeffs.write(i, set_index, edge.conductance.faer_inv() + current_val);
+                    let current_val = coeffs.read(i, current_index);
+                    coeffs.write(i, current_index, edge.conductance.faer_inv() + current_val);
                 }
             }
 
@@ -206,13 +269,13 @@ pub mod circuit_graph {
             for (i, node_index) in (num_paths..num_unkowns).zip(indices) {
                 // Place a +1 coefficient on each incoming current
                 for edge_ref in self.graph.edges_directed(node_index, Incoming) {
-                    let set_index = series_sets.get_edge_index(edge_ref.id()).unwrap();
-                    coeffs.write(i, set_index, T::faer_one());
+                    let current_index = edge_ref.weight().current_id.unwrap();
+                    coeffs.write(i, current_index, T::faer_one());
                 }
                 // Place a -1 coefficient on each outgoing current
                 for edge_ref in self.graph.edges_directed(node_index, Outgoing) {
-                    let set_index = series_sets.get_edge_index(edge_ref.id()).unwrap();
-                    coeffs.write(i, set_index, T::faer_one().faer_neg());
+                    let current_index = edge_ref.weight().current_id.unwrap();
+                    coeffs.write(i, current_index, T::faer_one().faer_neg());
                 }
             }
 
@@ -222,108 +285,13 @@ pub mod circuit_graph {
 
             let result = inverse * voltages;
 
-            let mut output = Vec::new();
+            let mut output = HashMap::new();
 
-            for (index, set) in series_sets.sets.iter().enumerate() {
-                output.push((set.clone(), result.read(index, 0)));
+            for index in 0..num_unkowns {
+                output.insert(index, result.read(index, 0));
             }
 
             output
-        }
-    }
-
-    /// A struct to hold the functionality for determining sets of edges in series
-    /// which will share current. This way we can figure out a mapping from edge
-    /// index to current value.
-    struct SeriesSets {
-        pub sets: Vec<HashSet<EdgeIndex>>,
-    }
-
-    impl SeriesSets {
-        /// Create a [`SeriesSets`] from a [`Circuit`].
-        pub fn new<T>(circuit: &Circuit<T>) -> Self {
-            let mut new = Self { sets: Vec::new() };
-
-            // Essentially don't bother with the hard bit if we don't need to
-            if circuit.count_unknown_currents() == circuit.graph.edge_count() {
-                for edge_index in circuit.graph.edge_indices() {
-                    new.insert(edge_index);
-                }
-
-                return new;
-            }
-
-            let indices = circuit.graph.node_indices().filter(|index| {
-                circuit.graph.edges_directed(*index, Incoming).count() == 1
-                    && circuit.graph.edges_directed(*index, Outgoing).count() == 1
-            });
-
-            for node_index in indices {
-                // We know because of that filter above that there will be exactly one
-                // result in the iterator, so the unwrap is safe.
-                let incoming_edge = circuit
-                    .graph
-                    .edges_directed(node_index, Incoming)
-                    .next()
-                    .unwrap()
-                    .id();
-                let outgoing_edge = circuit
-                    .graph
-                    .edges_directed(node_index, Outgoing)
-                    .next()
-                    .unwrap()
-                    .id();
-                new.insert_series_pair(incoming_edge, outgoing_edge);
-            }
-
-            for edge_index in circuit.graph.edge_indices() {
-                new.insert(edge_index);
-            }
-
-            new
-        }
-
-        fn insert(&mut self, edge_index: EdgeIndex) {
-            // If the edge is already somewhere in here, do nothing.
-            if self.sets.iter().any(|set| set.contains(&edge_index)) {
-                return;
-            }
-
-            // Otherwise, insert in a new HashSet.
-            let mut new_set = HashSet::new();
-            new_set.insert(edge_index);
-            self.sets.push(new_set);
-        }
-
-        fn insert_series_pair(&mut self, edge: EdgeIndex, other_edge: EdgeIndex) {
-            // .find() is okay here since there will only ever be exactly one HashSet that
-            // contains any given edge.
-            if let Some(set) = self
-                .sets
-                .iter_mut()
-                .find(|set| set.contains(&edge) || set.contains(&other_edge))
-            {
-                set.insert(edge);
-                set.insert(other_edge);
-            } else {
-                let mut new_set = HashSet::new();
-                new_set.insert(edge);
-                new_set.insert(other_edge);
-                self.sets.push(new_set);
-            }
-        }
-
-        /// Return the index of the [`HashSet`] in this [`SeriesSet`]'s `sets` which
-        /// contains the given `edge_index`.
-        pub fn get_edge_index(&self, edge_index: EdgeIndex) -> Option<usize> {
-            for (index, set) in self.sets.iter().enumerate() {
-                if set.contains(&edge_index) {
-                    return Some(index);
-                }
-            }
-
-            // If we get here, then edge_index isn't actually in this SeriesSets
-            None
         }
     }
 }
@@ -399,9 +367,9 @@ mod tests {
     /// Test that the correct number of unknown currents and voltages are being reported.
     #[test]
     fn check_simple_num_unknowns() {
-        let circuit = create_simple_circuit();
+        let mut circuit = create_simple_circuit();
 
-        assert_eq!(circuit.count_unknown_currents(), 1);
+        assert_eq!(circuit.determine_unknown_currents(), 1);
         assert_eq!(circuit.count_unknown_voltages(), 0);
     }
 
@@ -416,12 +384,12 @@ mod tests {
     /// Test that the solved current value through the resistor is correct.
     #[test]
     fn test_simple_solved_current() {
-        let circuit = create_simple_circuit();
+        let mut circuit = create_simple_circuit();
 
         let solved_currents = circuit.solve_currents();
 
         assert_eq!(solved_currents.len(), 1);
-        assert!(solved_currents[0].1 - 1.5 < 1e-10);
+        assert!(solved_currents.get(&0).unwrap() - 1.5 < 1e-10);
     }
 
     /// Test that the solved voltage drop across the resistor is correct.
@@ -473,9 +441,9 @@ mod tests {
     /// Test that the correct number of unknowns are reported.
     #[test]
     fn check_complex_num_unknowns() {
-        let circuit = create_complex_circuit();
+        let mut circuit = create_complex_circuit();
 
-        assert_eq!(circuit.count_unknown_currents(), 3);
+        assert_eq!(circuit.determine_unknown_currents(), 3);
         assert_eq!(circuit.count_unknown_voltages(), 1);
     }
 
@@ -490,19 +458,14 @@ mod tests {
     /// Test that the solved current value through each resistor is correct.
     #[test]
     fn test_complex_solved_currents() {
-        let circuit = create_complex_circuit();
+        let mut circuit = create_complex_circuit();
 
         let solved_currents = circuit.solve_currents();
 
-        let mapped_vals: Vec<(usize, f64)> = solved_currents
-            .iter()
-            .map(|tuple| (tuple.0.iter().last().unwrap().index(), tuple.1))
-            .collect();
-
         assert_eq!(solved_currents.len(), 3);
-        assert!(mapped_vals.iter().find(|tuple| tuple.0 == 0).unwrap().1 - 1.5 < 1e-10);
-        assert!(mapped_vals.iter().find(|tuple| tuple.0 == 1).unwrap().1 - 0.5 < 1e-10);
-        assert!(mapped_vals.iter().find(|tuple| tuple.0 == 2).unwrap().1 - 1.0 < 1e-10);
+        assert!(solved_currents.get(&0).unwrap() - 1.5 < 1e-10);
+        assert!(solved_currents.get(&1).unwrap() - 0.5 < 1e-10);
+        assert!(solved_currents.get(&2).unwrap() - 1.0 < 1e-10);
     }
 
     /// Test that the solved voltage drop across each resistor is correct.
@@ -542,9 +505,9 @@ mod tests {
     /// Test that the correct number of unknowns are being reported.
     #[test]
     fn check_series_num_unknowns() {
-        let circuit = create_series_circuit();
+        let mut circuit = create_series_circuit();
 
-        assert_eq!(circuit.count_unknown_currents(), 3);
+        assert_eq!(circuit.determine_unknown_currents(), 3);
         assert_eq!(circuit.count_unknown_voltages(), 2);
     }
 
@@ -559,20 +522,15 @@ mod tests {
     /// Test that the correct current values have been found
     #[test]
     fn check_series_solved_currents() {
-        let circuit = create_series_circuit();
+        let mut circuit = create_series_circuit();
 
         let solved_currents = circuit.solve_currents();
 
-        let mapped_vals: Vec<(usize, f64)> = solved_currents
-            .iter()
-            .map(|tuple| (tuple.0.iter().last().unwrap().index(), tuple.1))
-            .collect();
-
         assert_eq!(solved_currents.len(), 3);
 
-        assert!(mapped_vals.iter().find(|tuple| tuple.0 == 0).unwrap().1 - 7.0 / 6.0 < 1e-10);
-        assert!(mapped_vals.iter().find(|tuple| tuple.0 == 1).unwrap().1 - 5.0 / 6.0 < 1e-10);
-        assert!(mapped_vals.iter().find(|tuple| tuple.0 == 3).unwrap().1 - 1.0 / 3.0 < 1e-10);
+        assert!(solved_currents.get(&0).unwrap() - 1.0 / 3.0 < 1e-10);
+        assert!(solved_currents.get(&1).unwrap() - 7.0 / 6.0 < 1e-10);
+        assert!(solved_currents.get(&2).unwrap() - 5.0 / 6.0 < 1e-10);
     }
 
     /// Set up a circuit with multiple source and sink nodes.
