@@ -3,7 +3,7 @@ pub mod circuit_graph {
 
     use faer::prelude::SpSolver;
     use faer::solvers::Svd;
-    use faer::Mat;
+    use faer::{Col, Mat};
     use faer_entity::ComplexField;
     use petgraph::prelude::*;
 
@@ -246,12 +246,12 @@ pub mod circuit_graph {
             let num_bus_nodes = bus_indices.len();
 
             let mut coeffs: Mat<T> = Mat::zeros(num_paths + num_bus_nodes, num_unknowns);
-            let mut voltages: Mat<T> = Mat::zeros(num_unknowns, 1);
+            let mut voltages: Col<T> = Col::zeros(num_paths + num_bus_nodes);
 
             // Begin by establishing equations for the voltage drop along every source->sink
             // path. (KVL)
             for (i, path) in paths.iter().enumerate() {
-                voltages.write(i, 0, self.graph.node_weight(path.0).unwrap().voltage);
+                voltages.write(i, self.graph.node_weight(path.0).unwrap().voltage);
 
                 for edge_index in &path.1 {
                     let edge = self.graph.edge_weight(*edge_index).unwrap();
@@ -279,12 +279,12 @@ pub mod circuit_graph {
 
             // Solve the system of equations
             let solver = Svd::new(coeffs.as_ref());
-            let result = solver.solve(voltages);
+            solver.solve_in_place(voltages.as_mut().as_2d_mut());
 
             let mut out = Vec::new();
 
             for i in 0..num_unknowns {
-                out.push(result.read(i, 0));
+                out.push(voltages.read(i));
             }
 
             out
@@ -537,13 +537,13 @@ mod tests {
     /// -------__R__--------------------------
     /// |      1ohm        |                 |
     /// |+                | |               | |
-    /// |V 3          2ohm|R|           1ohm|R|
+    /// |V 3          1ohm|R|           1ohm|R|
     /// |-                | |               | |
     /// |      _____       |                 |
     /// |------__R__-------------------------|
     /// |      1ohm        |                 |
     /// |+                | |               | |
-    /// |V 2          2ohm|R|           2ohm|R|
+    /// |V 2          1ohm|R|           1ohm|R|
     /// |-                | |               | |
     /// |                  |                 |
     /// --------------------------------------
@@ -551,24 +551,26 @@ mod tests {
     ///          G
     /// ```
     fn create_multiple_source_circuit() -> Circuit<f64> {
-        let source1 = VertexMetadata::new(3.0, 0, VertexType::Source);
-        let source2 = VertexMetadata::new(2.0, 1, VertexType::Source);
+        // Note that source0 represents the node at the very top left of the circuit,
+        // and thus has the combined voltage of both the circuit's voltage sources.
+        let source0 = VertexMetadata::new(5.0, 0, VertexType::Source);
+        let source1 = VertexMetadata::new(2.0, 1, VertexType::Source);
 
-        let v1 = VertexMetadata::new(-1.0, 2, VertexType::Internal);
-        let v2 = VertexMetadata::new(-1.0, 3, VertexType::Internal);
+        let v0 = VertexMetadata::new(-1.0, 2, VertexType::Internal);
+        let v1 = VertexMetadata::new(-1.0, 3, VertexType::Internal);
 
         let sink = VertexMetadata::new(0.0, 4, VertexType::Sink);
 
-        let e1 = EdgeMetadata::new(0, 2, 1.0);
+        let e0 = EdgeMetadata::new(0, 2, 1.0);
+        let e1 = EdgeMetadata::new(2, 3, 1.0);
         let e2 = EdgeMetadata::new(2, 3, 1.0);
-        let e3 = EdgeMetadata::new(2, 3, 1.0);
-        let e4 = EdgeMetadata::new(1, 3, 1.0);
+        let e3 = EdgeMetadata::new(1, 3, 1.0);
+        let e4 = EdgeMetadata::new(3, 4, 1.0);
         let e5 = EdgeMetadata::new(3, 4, 1.0);
-        let e6 = EdgeMetadata::new(3, 4, 1.0);
 
         Circuit::new(
-            vec![source1, source2, v1, v2, sink],
-            vec![e1, e2, e3, e4, e5, e6],
+            vec![source0, source1, v0, v1, sink],
+            vec![e0, e1, e2, e3, e4, e5],
         )
     }
 
