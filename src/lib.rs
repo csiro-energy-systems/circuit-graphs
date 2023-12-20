@@ -151,12 +151,6 @@ pub mod circuit_graph {
                 }
             }
 
-            println!("{}", next_current_index);
-
-            let out = self.graph.edge_count() - series_nodes.len();
-
-            println!("{}", out);
-
             self.graph.edge_count() - series_nodes.len()
         }
 
@@ -337,7 +331,7 @@ mod tests {
     /// ----------------
     /// |              |
     /// |+            | |
-    /// V             |R|
+    /// V 3       2ohm|R|
     /// |-            | |
     /// |              |
     /// ----------------
@@ -402,7 +396,7 @@ mod tests {
     /// Set up a slightly more complex circuit:
     ///
     /// ```raw
-    ///     __ __
+    ///     _____
     /// ----__R__---------------
     /// |   1ohm   |           |
     /// |+        | |         | |
@@ -478,11 +472,11 @@ mod tests {
     /// Set up a more complex circuit with series components
     ///
     /// ```raw
-    ///     __ __       __ __
+    ///     _____       _____
     /// ----__R__-------__R__---
     /// |   1ohm   |    0.5ohm |
     /// |+        | |         | |
-    /// V     1ohm|R|     2ohm|R|
+    /// V 2   1ohm|R|     2ohm|R|
     /// |-        | |         | |
     /// |          |           |
     /// ------------------------
@@ -534,50 +528,46 @@ mod tests {
         assert!(solved_currents[2] - 5.0 / 6.0 < 1e-10);
     }
 
-    /// Set up a circuit with multiple source and sink nodes.
+    /// Set up a circuit with multiple source and sink nodes. The location of ground
+    /// for analysis is marked with G.
     ///
     /// ```raw
-    ///
-    /// -------__R__--------------__R__-------
+    ///        _____
+    /// -------__R__--------------------------
+    /// |      1ohm        |                 |
+    /// |+                | |               | |
+    /// |V 3          2ohm|R|           1ohm|R|
+    /// |-                | |               | |
+    /// |      _____       |                 |
+    /// |------__R__-------------------------|
+    /// |      1ohm        |                 |
+    /// |+                | |               | |
+    /// |V 2          2ohm|R|           2ohm|R|
+    /// |-                | |               | |
     /// |                  |                 |
-    /// |                 | |                |
-    /// |+                |R|               | |
-    /// |V                | |               |R|
-    /// |-                 |                | |
-    /// |     ----__R__---------__R__---     |
-    /// |     |            |           |     |
-    /// |     |+           |           |     |
-    /// |     |V           |          | |    |
-    /// |     |-           |          |R|    |
-    /// |     |            |          | |    |
-    /// |     ----__R__-----           |     |
-    /// |                              |     |
     /// --------------------------------------
+    ///          |
+    ///          G
     /// ```
     fn create_multiple_source_circuit() -> Circuit<f64> {
-        let source1 = VertexMetadata::new(2.0, 0, VertexType::Source);
-        let source2 = VertexMetadata::new(1.5, 1, VertexType::Source);
+        let source1 = VertexMetadata::new(3.0, 0, VertexType::Source);
+        let source2 = VertexMetadata::new(2.0, 1, VertexType::Source);
 
         let v1 = VertexMetadata::new(-1.0, 2, VertexType::Internal);
         let v2 = VertexMetadata::new(-1.0, 3, VertexType::Internal);
-        let v3 = VertexMetadata::new(-1.0, 4, VertexType::Internal);
-        let v4 = VertexMetadata::new(-1.0, 5, VertexType::Internal);
 
-        let sink1 = VertexMetadata::new(0.0, 6, VertexType::Sink);
-        let sink2 = VertexMetadata::new(0.0, 7, VertexType::Sink);
+        let sink = VertexMetadata::new(0.0, 4, VertexType::Sink);
 
         let e1 = EdgeMetadata::new(0, 2, 1.0);
-        let e2 = EdgeMetadata::new(2, 3, 1.0);
-        let e3 = EdgeMetadata::new(3, 6, 1.0);
-        let e4 = EdgeMetadata::new(2, 4, 1.0);
-        let e5 = EdgeMetadata::new(4, 5, 1.0);
-        let e6 = EdgeMetadata::new(5, 6, 1.0);
-        let e7 = EdgeMetadata::new(4, 7, 1.0);
-        let e8 = EdgeMetadata::new(1, 4, 1.0);
+        let e2 = EdgeMetadata::new(1, 3, 1.0);
+        let e3 = EdgeMetadata::new(2, 3, 1.0);
+        let e4 = EdgeMetadata::new(2, 3, 1.0);
+        let e5 = EdgeMetadata::new(3, 4, 1.0);
+        let e6 = EdgeMetadata::new(3, 4, 1.0);
 
         Circuit::new(
-            vec![source1, source2, v1, v2, v3, v4, sink1, sink2],
-            vec![e1, e2, e3, e4, e5, e6, e7, e8],
+            vec![source1, source2, v1, v2, sink],
+            vec![e1, e2, e3, e4, e5, e6],
         )
     }
 
@@ -586,6 +576,23 @@ mod tests {
     fn check_multiple_num_paths() {
         let circuit = create_multiple_source_circuit();
 
-        assert_eq!(circuit.find_paths().len(), 5);
+        assert_eq!(circuit.find_paths().len(), 6);
+    }
+
+    /// Test that the correct currents are found.
+    #[test]
+    fn test_multiple_solved_currents() {
+        let mut circuit = create_multiple_source_circuit();
+
+        let solved_currents = circuit.solve_currents();
+
+        assert_eq!(solved_currents.len(), 6);
+
+        assert!(solved_currents[0] - 24. / 13. < 1e-10);
+        assert!(solved_currents[1] - 16. / 13. < 1e-10);
+        assert!(solved_currents[2] - 8. / 13. < 1e-10);
+        assert!(solved_currents[3] - 1. / 13. < 1e-10);
+        assert!(solved_currents[4] - 25. / 26. < 1e-10);
+        assert!(solved_currents[5] - 25. / 26. < 1e-10);
     }
 }
