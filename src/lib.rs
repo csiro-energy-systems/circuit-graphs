@@ -2,7 +2,7 @@ pub mod circuit_graph {
     use std::collections::HashMap;
 
     use faer::prelude::SpSolver;
-    use faer::solvers::FullPivLu;
+    use faer::solvers::Svd;
     use faer::Mat;
     use faer_entity::ComplexField;
     use petgraph::prelude::*;
@@ -228,16 +228,28 @@ pub mod circuit_graph {
     impl<T: ComplexField + std::ops::Add<Output = T>> Circuit<T> {
         /// Solve current values
         pub fn solve_currents(&mut self) -> Vec<T> {
-            let num_unkowns = self.determine_unknown_currents();
-
-            let mut coeffs: Mat<T> = Mat::zeros(num_unkowns, num_unkowns);
-            let mut voltages: Mat<T> = Mat::zeros(num_unkowns, 1);
+            let num_unknowns = self.determine_unknown_currents();
 
             let paths = self.find_paths();
             let num_paths = paths.len();
 
+            // Now find internal vertices which bus multiple branches
+            let bus_indices: Vec<NodeIndex> = self
+                .graph
+                .node_indices()
+                .filter(|index| {
+                    self.graph.node_weight(*index).unwrap().vertex_type == VertexType::Internal
+                        && (self.graph.edges_directed(*index, Incoming).count() != 1
+                            || self.graph.edges_directed(*index, Outgoing).count() != 1)
+                })
+                .collect();
+            let num_bus_nodes = bus_indices.len();
+
+            let mut coeffs: Mat<T> = Mat::zeros(num_paths + num_bus_nodes, num_unknowns);
+            let mut voltages: Mat<T> = Mat::zeros(num_unknowns, 1);
+
             // Begin by establishing equations for the voltage drop along every source->sink
-            // path
+            // path. (KVL)
             for (i, path) in paths.iter().enumerate() {
                 voltages.write(i, 0, self.graph.node_weight(path.0).unwrap().voltage);
 
@@ -250,20 +262,9 @@ pub mod circuit_graph {
                 }
             }
 
-            // Now find internal vertices which bus multiple branches
-            let indices: Vec<NodeIndex> = self
-                .graph
-                .node_indices()
-                .filter(|index| {
-                    self.graph.node_weight(*index).unwrap().vertex_type == VertexType::Internal
-                        && (self.graph.edges_directed(*index, Incoming).count() != 1
-                            || self.graph.edges_directed(*index, Outgoing).count() != 1)
-                })
-                .collect();
-
-            // For each of these vertices, create an equation from the fact that current
-            // cannot pool anywhere, whatever enters a node must also leave.
-            for (i, node_index) in (num_paths..num_unkowns).zip(indices) {
+            // For each of the bussing nodes, create an equation from the fact that current
+            // cannot pool anywhere, whatever enters a node must also leave. (KCL)
+            for (i, node_index) in (num_paths..(num_paths + num_bus_nodes)).zip(bus_indices) {
                 // Place a +1 coefficient on each incoming current
                 for edge_ref in self.graph.edges_directed(node_index, Incoming) {
                     let current_index = edge_ref.weight().current_id.unwrap();
@@ -277,12 +278,12 @@ pub mod circuit_graph {
             }
 
             // Solve the system of equations
-            let solver = FullPivLu::new(coeffs.as_ref());
+            let solver = Svd::new(coeffs.as_ref());
             let result = solver.solve(voltages);
 
             let mut out = Vec::new();
 
-            for i in 0..num_unkowns {
+            for i in 0..num_unknowns {
                 out.push(result.read(i, 0));
             }
 
@@ -559,9 +560,9 @@ mod tests {
         let sink = VertexMetadata::new(0.0, 4, VertexType::Sink);
 
         let e1 = EdgeMetadata::new(0, 2, 1.0);
-        let e2 = EdgeMetadata::new(1, 3, 1.0);
+        let e2 = EdgeMetadata::new(2, 3, 1.0);
         let e3 = EdgeMetadata::new(2, 3, 1.0);
-        let e4 = EdgeMetadata::new(2, 3, 1.0);
+        let e4 = EdgeMetadata::new(1, 3, 1.0);
         let e5 = EdgeMetadata::new(3, 4, 1.0);
         let e6 = EdgeMetadata::new(3, 4, 1.0);
 
@@ -586,13 +587,15 @@ mod tests {
 
         let solved_currents = circuit.solve_currents();
 
+        println!("{:?}", solved_currents);
+
         assert_eq!(solved_currents.len(), 6);
 
-        assert!(solved_currents[0] - 24. / 13. < 1e-10);
-        assert!(solved_currents[1] - 16. / 13. < 1e-10);
-        assert!(solved_currents[2] - 8. / 13. < 1e-10);
-        assert!(solved_currents[3] - 1. / 13. < 1e-10);
-        assert!(solved_currents[4] - 25. / 26. < 1e-10);
-        assert!(solved_currents[5] - 25. / 26. < 1e-10);
+        assert!(solved_currents[0] - 26. / 11. < 1e-10);
+        assert!(solved_currents[1] - 13. / 11. < 1e-10);
+        assert!(solved_currents[2] - 13. / 11. < 1e-10);
+        assert!(solved_currents[3] - 6. / 11. < 1e-10);
+        assert!(solved_currents[4] - 16. / 11. < 1e-10);
+        assert!(solved_currents[5] - 16. / 11. < 1e-10);
     }
 }

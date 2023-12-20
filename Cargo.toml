@@ -7,5 +7,5 @@ edition = "2021"
 
 [dependencies]
 petgraph = "0.6.2"
-faer = "0.16"
-faer-entity = "0.16"
+faer = "0.16.0"
+faer-entity = "0.16.0"
