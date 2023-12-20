@@ -227,7 +227,7 @@ pub mod circuit_graph {
 
     impl<T: ComplexField + std::ops::Add<Output = T>> Circuit<T> {
         /// Solve current values
-        pub fn solve_currents(&mut self) -> Vec<T> {
+        pub fn solve_currents(&mut self) -> Col<T> {
             let num_unknowns = self.determine_unknown_currents();
 
             let paths = self.find_paths();
@@ -245,13 +245,15 @@ pub mod circuit_graph {
                 .collect();
             let num_bus_nodes = bus_indices.len();
 
+            // The coefficient matrix for the system of equations
             let mut coeffs: Mat<T> = Mat::zeros(num_paths + num_bus_nodes, num_unknowns);
-            let mut voltages: Col<T> = Col::zeros(num_paths + num_bus_nodes);
+            // The column vector of RHS values for the system of equations
+            let mut column: Col<T> = Col::zeros(num_paths + num_bus_nodes);
 
             // Begin by establishing equations for the voltage drop along every source->sink
             // path. (KVL)
             for (i, path) in paths.iter().enumerate() {
-                voltages.write(i, self.graph.node_weight(path.0).unwrap().voltage);
+                column.write(i, self.graph.node_weight(path.0).unwrap().voltage);
 
                 for edge_index in &path.1 {
                     let edge = self.graph.edge_weight(*edge_index).unwrap();
@@ -279,15 +281,10 @@ pub mod circuit_graph {
 
             // Solve the system of equations
             let solver = Svd::new(coeffs.as_ref());
-            solver.solve_in_place(voltages.as_mut().as_2d_mut());
+            solver.solve_in_place(column.as_mut().as_2d_mut());
+            column.resize_with(num_unknowns, |_| T::faer_zero());
 
-            let mut out = Vec::new();
-
-            for i in 0..num_unknowns {
-                out.push(voltages.read(i));
-            }
-
-            out
+            column
         }
     }
 }
@@ -384,8 +381,8 @@ mod tests {
 
         let solved_currents = circuit.solve_currents();
 
-        assert_eq!(solved_currents.len(), 1);
-        assert!(solved_currents[0] - 1.5 < 1e-10);
+        assert_eq!(solved_currents.nrows(), 1);
+        assert!(solved_currents.read(0) - 1.5 < 1e-10);
     }
 
     /// Test that the solved voltage drop across the resistor is correct.
@@ -458,10 +455,10 @@ mod tests {
 
         let solved_currents = circuit.solve_currents();
 
-        assert_eq!(solved_currents.len(), 3);
-        assert!(solved_currents[0] - 1.5 < 1e-10);
-        assert!(solved_currents[1] - 0.5 < 1e-10);
-        assert!(solved_currents[2] - 1.0 < 1e-10);
+        assert_eq!(solved_currents.nrows(), 3);
+        assert!(solved_currents.read(0) - 1.5 < 1e-10);
+        assert!(solved_currents.read(1) - 0.5 < 1e-10);
+        assert!(solved_currents.read(2) - 1.0 < 1e-10);
     }
 
     /// Test that the solved voltage drop across each resistor is correct.
@@ -522,11 +519,11 @@ mod tests {
 
         let solved_currents = circuit.solve_currents();
 
-        assert_eq!(solved_currents.len(), 3);
+        assert_eq!(solved_currents.nrows(), 3);
 
-        assert!(solved_currents[0] - 1.0 / 3.0 < 1e-10);
-        assert!(solved_currents[1] - 7.0 / 6.0 < 1e-10);
-        assert!(solved_currents[2] - 5.0 / 6.0 < 1e-10);
+        assert!(solved_currents.read(0) - 1.0 / 3.0 < 1e-10);
+        assert!(solved_currents.read(1) - 7.0 / 6.0 < 1e-10);
+        assert!(solved_currents.read(2) - 5.0 / 6.0 < 1e-10);
     }
 
     /// Set up a circuit with multiple source and sink nodes. The location of ground
@@ -589,15 +586,13 @@ mod tests {
 
         let solved_currents = circuit.solve_currents();
 
-        println!("{:?}", solved_currents);
+        assert_eq!(solved_currents.nrows(), 6);
 
-        assert_eq!(solved_currents.len(), 6);
-
-        assert!(solved_currents[0] - 26. / 11. < 1e-10);
-        assert!(solved_currents[1] - 13. / 11. < 1e-10);
-        assert!(solved_currents[2] - 13. / 11. < 1e-10);
-        assert!(solved_currents[3] - 6. / 11. < 1e-10);
-        assert!(solved_currents[4] - 16. / 11. < 1e-10);
-        assert!(solved_currents[5] - 16. / 11. < 1e-10);
+        assert!(solved_currents.read(0) - 26. / 11. < 1e-10);
+        assert!(solved_currents.read(1) - 13. / 11. < 1e-10);
+        assert!(solved_currents.read(2) - 13. / 11. < 1e-10);
+        assert!(solved_currents.read(3) - 6. / 11. < 1e-10);
+        assert!(solved_currents.read(4) - 16. / 11. < 1e-10);
+        assert!(solved_currents.read(5) - 16. / 11. < 1e-10);
     }
 }
