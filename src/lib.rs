@@ -1,7 +1,8 @@
 pub mod circuit_graph {
     use std::collections::HashMap;
 
-    use faer::solvers::{FullPivLu, SolverCore};
+    use faer::prelude::SpSolver;
+    use faer::solvers::FullPivLu;
     use faer::Mat;
     use faer_entity::ComplexField;
     use petgraph::prelude::*;
@@ -63,7 +64,7 @@ pub mod circuit_graph {
             let mut vertex_indices: HashMap<u32, NodeIndex> = HashMap::new();
 
             for vertex in vertices {
-                let tag = vertex.tag.clone();
+                let tag = vertex.tag;
                 let node_index = graph.add_node(vertex);
                 vertex_indices.insert(tag, node_index);
             }
@@ -79,7 +80,8 @@ pub mod circuit_graph {
             Self { graph }
         }
 
-        /// Count the number of unknown currents that need to be found when solving.
+        /// Find and label sets of edges which are in series. Returns the number of
+        /// distinct currents which need to be found in the circuit.
         pub fn determine_unknown_currents(&mut self) -> usize {
             // This method uses the fact that every edge of the graph corresponds to a
             // resistor whose current we want to find, but that resistors in series (which
@@ -143,7 +145,7 @@ pub mod circuit_graph {
             // Now that all the series pairs have been added, label every other edge in
             // increasing order.
             for edge_weight in self.graph.edge_weights_mut() {
-                if let None = edge_weight.current_id {
+                if edge_weight.current_id.is_none() {
                     edge_weight.current_id = Some(next_current_index);
                     next_current_index += 1;
                 }
@@ -155,7 +157,7 @@ pub mod circuit_graph {
 
             println!("{}", out);
 
-            return self.graph.edge_count() - series_nodes.len();
+            self.graph.edge_count() - series_nodes.len()
         }
 
         /// Count the number of unknown voltages that need to be found when solving.
@@ -184,7 +186,8 @@ pub mod circuit_graph {
             paths
         }
 
-        /// Finds, as sequences of edges, all the paths between a given source and sink node.
+        /// Finds, as sequences of edges, all the paths between a given source and sink node
+        /// using a modified depth-first search.
         /// Also returns the source node as a convenience.
         fn find_paths_between(
             &self,
@@ -230,7 +233,7 @@ pub mod circuit_graph {
 
     impl<T: ComplexField + std::ops::Add<Output = T>> Circuit<T> {
         /// Solve current values
-        pub fn solve_currents(&mut self) -> HashMap<usize, T> {
+        pub fn solve_currents(&mut self) -> Vec<T> {
             let num_unkowns = self.determine_unknown_currents();
 
             let mut coeffs: Mat<T> = Mat::zeros(num_unkowns, num_unkowns);
@@ -239,7 +242,7 @@ pub mod circuit_graph {
             let paths = self.find_paths();
             let num_paths = paths.len();
 
-            // Begin by establishing equations for the current drop along every source->sink
+            // Begin by establishing equations for the voltage drop along every source->sink
             // path
             for (i, path) in paths.iter().enumerate() {
                 voltages.write(i, 0, self.graph.node_weight(path.0).unwrap().voltage);
@@ -281,17 +284,15 @@ pub mod circuit_graph {
 
             // Solve the system of equations
             let solver = FullPivLu::new(coeffs.as_ref());
-            let inverse = solver.inverse();
+            let result = solver.solve(voltages);
 
-            let result = inverse * voltages;
+            let mut out = Vec::new();
 
-            let mut output = HashMap::new();
-
-            for index in 0..num_unkowns {
-                output.insert(index, result.read(index, 0));
+            for i in 0..num_unkowns {
+                out.push(result.read(i, 0));
             }
 
-            output
+            out
         }
     }
 }
@@ -389,7 +390,7 @@ mod tests {
         let solved_currents = circuit.solve_currents();
 
         assert_eq!(solved_currents.len(), 1);
-        assert!(solved_currents.get(&0).unwrap() - 1.5 < 1e-10);
+        assert!(solved_currents[0] - 1.5 < 1e-10);
     }
 
     /// Test that the solved voltage drop across the resistor is correct.
@@ -463,9 +464,9 @@ mod tests {
         let solved_currents = circuit.solve_currents();
 
         assert_eq!(solved_currents.len(), 3);
-        assert!(solved_currents.get(&0).unwrap() - 1.5 < 1e-10);
-        assert!(solved_currents.get(&1).unwrap() - 0.5 < 1e-10);
-        assert!(solved_currents.get(&2).unwrap() - 1.0 < 1e-10);
+        assert!(solved_currents[0] - 1.5 < 1e-10);
+        assert!(solved_currents[1] - 0.5 < 1e-10);
+        assert!(solved_currents[2] - 1.0 < 1e-10);
     }
 
     /// Test that the solved voltage drop across each resistor is correct.
@@ -528,9 +529,9 @@ mod tests {
 
         assert_eq!(solved_currents.len(), 3);
 
-        assert!(solved_currents.get(&0).unwrap() - 1.0 / 3.0 < 1e-10);
-        assert!(solved_currents.get(&1).unwrap() - 7.0 / 6.0 < 1e-10);
-        assert!(solved_currents.get(&2).unwrap() - 5.0 / 6.0 < 1e-10);
+        assert!(solved_currents[0] - 1.0 / 3.0 < 1e-10);
+        assert!(solved_currents[1] - 7.0 / 6.0 < 1e-10);
+        assert!(solved_currents[2] - 5.0 / 6.0 < 1e-10);
     }
 
     /// Set up a circuit with multiple source and sink nodes.
