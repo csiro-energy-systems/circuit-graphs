@@ -5,6 +5,7 @@ pub mod circuit_graph {
     use faer::solvers::Svd;
     use faer::{Col, Mat};
     use faer_entity::ComplexField;
+    use petgraph::algo;
     use petgraph::prelude::*;
 
     #[derive(PartialEq, Eq)]
@@ -26,13 +27,11 @@ pub mod circuit_graph {
         /// will have [`None`] instead.
         pub fn new(voltage: Option<T>, tag: u32, vertex_type: VertexType) -> Self {
             match vertex_type {
-                VertexType::Internal => {
-                    Self {
-                        voltage: None,
-                        tag,
-                        vertex_type,
-                    }
-                }
+                VertexType::Internal => Self {
+                    voltage: None,
+                    tag,
+                    vertex_type,
+                },
                 _ => {
                     assert!(!voltage.is_none());
                     Self {
@@ -240,7 +239,13 @@ pub mod circuit_graph {
         }
     }
 
-    impl<T: ComplexField + std::ops::Add<Output = T>> Circuit<T> {
+    impl<
+            T: ComplexField
+                + std::ops::Add<Output = T>
+                + std::ops::Sub<Output = T>
+                + std::ops::Mul<Output = T>,
+        > Circuit<T>
+    {
         /// Solve current values
         pub fn solve_currents(&mut self) -> Col<T> {
             let num_unknowns = self.determine_unknown_currents();
@@ -302,6 +307,50 @@ pub mod circuit_graph {
             column.resize_with(num_unknowns, |_| T::faer_zero());
 
             column
+        }
+
+        /// Solve for the voltages at every node in the circuit. Requires a Col<T>
+        /// indexed by the graph's edges' current_id values, where the entries are
+        /// the currents belonging to those groups of edges.
+        ///
+        /// Returns nothing as the voltages are set on each node's [`VertexMetadata`].
+        fn solve_voltages(&mut self, currents: Col<T>) {
+            // We ignore the possible error here since for it to occur, there would
+            // need to be a cycle in the graph, which would have mucked up finding
+            // the currents in the first place, and shouldn't occur anyway.
+            let sorted_nodes = algo::toposort(&self.graph, None).unwrap();
+
+            for node_index in sorted_nodes {
+                let weight = self.graph.node_weight(node_index).unwrap();
+
+                if weight.vertex_type != VertexType::Internal {
+                    return;
+                }
+
+                let prior_index = self
+                    .graph
+                    .neighbors_directed(node_index, Incoming)
+                    .next()
+                    .unwrap();
+                let prior_voltage = self
+                    .graph
+                    .node_weight(prior_index)
+                    .unwrap()
+                    .voltage
+                    .unwrap();
+                let connection_index = self.graph.find_edge(prior_index, node_index).unwrap();
+                let edge_weight = self.graph.edge_weight(connection_index).unwrap();
+
+                let new_voltage = Some(
+                    prior_voltage
+                        - currents.read(edge_weight.current_id.unwrap())
+                            * edge_weight.conductance.faer_inv(),
+                );
+
+                let weight = self.graph.node_weight_mut(node_index).unwrap();
+
+                weight.voltage = new_voltage;
+            }
         }
     }
 }
@@ -400,12 +449,6 @@ mod tests {
 
         assert_eq!(solved_currents.nrows(), 1);
         assert!(solved_currents.read(0) - 1.5 < 1e-10);
-    }
-
-    /// Test that the solved voltage drop across the resistor is correct.
-    #[test]
-    fn test_simple_solved_voltage() {
-        todo!()
     }
 
     /// Set up a slightly more complex circuit:
