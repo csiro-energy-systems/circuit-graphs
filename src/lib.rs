@@ -725,6 +725,17 @@ mod tests {
     /// Test that the correct voltages are found.
     #[test]
     fn test_multiple_solved_voltages() {
-        todo!();
+        let mut circuit = create_multiple_source_circuit();
+
+        circuit.solve_currents();
+        circuit.solve_voltages();
+
+        let voltages: Vec<f64> = circuit.graph.node_weights().map(|weight| weight.voltage.unwrap()).collect();
+
+        assert!(voltages[0] - 5.0 < 1e-10);
+        assert!(voltages[1] - 2.0 < 1e-10);
+        assert!(voltages[2] - 29.0 / 11.0 < 1e-10);
+        assert!(voltages[3] - 16.0 / 11.0 < 1e-10);
+        assert!(voltages[4] - 0.0 < 1e-10);
     }
 }
