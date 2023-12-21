@@ -27,19 +27,19 @@ pub mod circuit_graph {
         pub fn new(voltage: Option<T>, tag: u32, vertex_type: VertexType) -> Self {
             match vertex_type {
                 VertexType::Internal => {
-                    return Self {
+                    Self {
                         voltage: None,
                         tag,
                         vertex_type,
-                    };
+                    }
                 }
                 _ => {
                     assert!(!voltage.is_none());
-                    return Self {
+                    Self {
                         voltage,
                         tag,
                         vertex_type,
-                    };
+                    }
                 }
             }
         }
