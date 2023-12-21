@@ -49,6 +49,7 @@ pub mod circuit_graph {
         pub head: u32,
         pub conductance: T,
         current_id: Option<usize>,
+        pub current: Option<T>,
     }
 
     impl<T> EdgeMetadata<T> {
@@ -58,6 +59,7 @@ pub mod circuit_graph {
                 head,
                 conductance,
                 current_id: None,
+                current: None,
             }
         }
     }
@@ -247,7 +249,7 @@ pub mod circuit_graph {
         > Circuit<T>
     {
         /// Solve current values
-        pub fn solve_currents(&mut self) -> Col<T> {
+        pub fn solve_currents(&mut self) {
             let num_unknowns = self.determine_unknown_currents();
 
             let paths = self.find_paths();
@@ -306,15 +308,17 @@ pub mod circuit_graph {
             solver.solve_in_place(column.as_mut().as_2d_mut());
             column.resize_with(num_unknowns, |_| T::faer_zero());
 
-            column
+            for edge_weight in self.graph.edge_weights_mut() {
+                let current_id = edge_weight.current_id.unwrap();
+                edge_weight.current = Some(column.read(current_id));
+            }
         }
 
-        /// Solve for the voltages at every node in the circuit. Requires a Col<T>
-        /// indexed by the graph's edges' current_id values, where the entries are
-        /// the currents belonging to those groups of edges.
+        /// Solve for the voltages at every node in the circuit. Uses the currents
+        /// assigned to each [`EdgeMetadata`] by `solve_currents`.
         ///
         /// Returns nothing as the voltages are set on each node's [`VertexMetadata`].
-        pub fn solve_voltages(&mut self, currents: &Col<T>) {
+        pub fn solve_voltages(&mut self) {
             // We ignore the possible error here since for it to occur, there would
             // need to be a cycle in the graph, which would have mucked up finding
             // the currents in the first place, and shouldn't occur anyway.
@@ -343,8 +347,7 @@ pub mod circuit_graph {
 
                 let new_voltage = Some(
                     prior_voltage
-                        - currents.read(edge_weight.current_id.unwrap())
-                            * edge_weight.conductance.faer_inv(),
+                        - edge_weight.current.unwrap() * edge_weight.conductance.faer_inv(),
                 );
 
                 let weight = self.graph.node_weight_mut(node_index).unwrap();
@@ -445,10 +448,15 @@ mod tests {
     fn test_simple_solved_current() {
         let mut circuit = create_simple_circuit();
 
-        let solved_currents = circuit.solve_currents();
+        circuit.solve_currents();
+        let solved_currents: Vec<f64> = circuit
+            .graph
+            .edge_weights()
+            .map(|weight| weight.current.unwrap())
+            .collect();
 
-        assert_eq!(solved_currents.nrows(), 1);
-        assert!(solved_currents.read(0) - 1.5 < 1e-10);
+        assert_eq!(solved_currents.len(), 1);
+        assert!(solved_currents[0] - 1.5 < 1e-10);
     }
 
     /// Set up a slightly more complex circuit:
@@ -513,12 +521,17 @@ mod tests {
     fn test_complex_solved_currents() {
         let mut circuit = create_complex_circuit();
 
-        let solved_currents = circuit.solve_currents();
+        circuit.solve_currents();
+        let solved_currents: Vec<f64> = circuit
+            .graph
+            .edge_weights()
+            .map(|weight| weight.current.unwrap())
+            .collect();
 
-        assert_eq!(solved_currents.nrows(), 3);
-        assert!(solved_currents.read(0) - 1.5 < 1e-10);
-        assert!(solved_currents.read(1) - 0.5 < 1e-10);
-        assert!(solved_currents.read(2) - 1.0 < 1e-10);
+        assert_eq!(solved_currents.len(), 3);
+        assert!(solved_currents[0] - 1.5 < 1e-10);
+        assert!(solved_currents[1] - 0.5 < 1e-10);
+        assert!(solved_currents[2] - 1.0 < 1e-10);
     }
 
     /// Test that the solved voltage drop across each resistor is correct.
@@ -526,10 +539,14 @@ mod tests {
     fn test_complex_solved_voltages() {
         let mut circuit = create_complex_circuit();
 
-        let solved_currents = circuit.solve_currents();
-        circuit.solve_voltages(&solved_currents);
+        circuit.solve_currents();
+        circuit.solve_voltages();
 
-        let node = circuit.graph.node_weights().find(|node| node.vertex_type == VertexType::Internal).unwrap();
+        let node = circuit
+            .graph
+            .node_weights()
+            .find(|node| node.vertex_type == VertexType::Internal)
+            .unwrap();
 
         assert!(node.voltage.unwrap() - 0.5 < 1e-10);
     }
@@ -584,13 +601,19 @@ mod tests {
     fn check_series_solved_currents() {
         let mut circuit = create_series_circuit();
 
-        let solved_currents = circuit.solve_currents();
+        circuit.solve_currents();
+        let solved_currents: Vec<f64> = circuit
+            .graph
+            .edge_weights()
+            .map(|weight| weight.current.unwrap())
+            .collect();
 
-        assert_eq!(solved_currents.nrows(), 3);
+        assert_eq!(solved_currents.len(), 4);
 
-        assert!(solved_currents.read(0) - 1.0 / 3.0 < 1e-10);
-        assert!(solved_currents.read(1) - 7.0 / 6.0 < 1e-10);
-        assert!(solved_currents.read(2) - 5.0 / 6.0 < 1e-10);
+        assert!(solved_currents[0] - 7.0 / 6.0 < 1e-10);
+        assert!(solved_currents[1] - 5.0 / 6.0 < 1e-10);
+        assert!(solved_currents[2] - 1.0 / 3.0 < 1e-10);
+        assert!(solved_currents[3] - 1.0 / 3.0 < 1e-10);
     }
 
     /// Test that the correct voltage values have been found
@@ -598,10 +621,14 @@ mod tests {
     fn test_series_solved_voltages() {
         let mut circuit = create_series_circuit();
 
-        let solved_currents = circuit.solve_currents();
-        circuit.solve_voltages(&solved_currents);
+        circuit.solve_currents();
+        circuit.solve_voltages();
 
-        let voltages: Vec<f64> = circuit.graph.node_weights().map(|weight| weight.voltage.unwrap()).collect();
+        let voltages: Vec<f64> = circuit
+            .graph
+            .node_weights()
+            .map(|weight| weight.voltage.unwrap())
+            .collect();
 
         assert!(voltages[0] - 2.0 < 1e-10);
         assert!(voltages[1] - 5.0 / 6.0 < 1e-10);
@@ -667,16 +694,21 @@ mod tests {
     fn test_multiple_solved_currents() {
         let mut circuit = create_multiple_source_circuit();
 
-        let solved_currents = circuit.solve_currents();
+        circuit.solve_currents();
+        let solved_currents: Vec<f64> = circuit
+            .graph
+            .edge_weights()
+            .map(|weight| weight.current.unwrap())
+            .collect();
 
-        assert_eq!(solved_currents.nrows(), 6);
+        assert_eq!(solved_currents.len(), 6);
 
-        assert!(solved_currents.read(0) - 26. / 11. < 1e-10);
-        assert!(solved_currents.read(1) - 13. / 11. < 1e-10);
-        assert!(solved_currents.read(2) - 13. / 11. < 1e-10);
-        assert!(solved_currents.read(3) - 6. / 11. < 1e-10);
-        assert!(solved_currents.read(4) - 16. / 11. < 1e-10);
-        assert!(solved_currents.read(5) - 16. / 11. < 1e-10);
+        assert!(solved_currents[0] - 26. / 11. < 1e-10);
+        assert!(solved_currents[1] - 13. / 11. < 1e-10);
+        assert!(solved_currents[2] - 13. / 11. < 1e-10);
+        assert!(solved_currents[3] - 6. / 11. < 1e-10);
+        assert!(solved_currents[4] - 16. / 11. < 1e-10);
+        assert!(solved_currents[5] - 16. / 11. < 1e-10);
     }
 
     /// Test that the correct voltages are found.
