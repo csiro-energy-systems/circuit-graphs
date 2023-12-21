@@ -319,6 +319,17 @@ pub mod circuit_graph {
         ///
         /// Returns nothing as the voltages are set on each node's [`VertexMetadata`].
         pub fn solve_voltages(&mut self) {
+            // First ensure that the currents have in fact been found. If they aren't,
+            // it's not possible to find the voltages.
+            if self
+                .graph
+                .edge_weights()
+                .map(|weight| weight.current)
+                .any(|current| current.is_none())
+            {
+                self.solve_currents()
+            }
+
             // We ignore the possible error here since for it to occur, there would
             // need to be a cycle in the graph, which would have mucked up finding
             // the currents in the first place, and shouldn't occur anyway.
@@ -428,7 +439,7 @@ mod tests {
 
     /// Test that the correct number of unknown currents and voltages are being reported.
     #[test]
-    fn check_simple_num_unknowns() {
+    fn test_simple_num_unknowns() {
         let mut circuit = create_simple_circuit();
 
         assert_eq!(circuit.determine_unknown_currents(), 1);
@@ -437,7 +448,7 @@ mod tests {
 
     /// Test that the correct number of paths are found.
     #[test]
-    fn check_simple_num_paths() {
+    fn test_simple_num_paths() {
         let circuit = create_simple_circuit();
 
         assert_eq!(circuit.find_paths().len(), 1);
@@ -501,7 +512,7 @@ mod tests {
 
     /// Test that the correct number of unknowns are reported.
     #[test]
-    fn check_complex_num_unknowns() {
+    fn test_complex_num_unknowns() {
         let mut circuit = create_complex_circuit();
 
         assert_eq!(circuit.determine_unknown_currents(), 3);
@@ -510,7 +521,7 @@ mod tests {
 
     /// Test that the correct number of paths are found.
     #[test]
-    fn check_complex_num_paths() {
+    fn test_complex_num_paths() {
         let circuit = create_complex_circuit();
 
         assert_eq!(circuit.find_paths().len(), 2);
@@ -581,7 +592,7 @@ mod tests {
 
     /// Test that the correct number of unknowns are being reported.
     #[test]
-    fn check_series_num_unknowns() {
+    fn test_series_num_unknowns() {
         let mut circuit = create_series_circuit();
 
         assert_eq!(circuit.determine_unknown_currents(), 3);
@@ -590,7 +601,7 @@ mod tests {
 
     /// Test that the correct number of paths are found.
     #[test]
-    fn check_series_num_paths() {
+    fn test_series_num_paths() {
         let circuit = create_series_circuit();
 
         assert_eq!(circuit.find_paths().len(), 2);
@@ -598,7 +609,7 @@ mod tests {
 
     /// Test that the correct current values have been found
     #[test]
-    fn check_series_solved_currents() {
+    fn test_series_solved_currents() {
         let mut circuit = create_series_circuit();
 
         circuit.solve_currents();
@@ -683,7 +694,7 @@ mod tests {
 
     /// Test that the correct number of paths are found.
     #[test]
-    fn check_multiple_num_paths() {
+    fn test_multiple_num_paths() {
         let circuit = create_multiple_source_circuit();
 
         assert_eq!(circuit.find_paths().len(), 6);
