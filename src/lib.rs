@@ -15,17 +15,32 @@ pub mod circuit_graph {
     }
 
     pub struct VertexMetadata<T> {
-        pub voltage: T,
+        pub voltage: Option<T>,
         pub tag: u32,
         pub vertex_type: VertexType,
     }
 
     impl<T> VertexMetadata<T> {
-        pub fn new(voltage: T, tag: u32, vertex_type: VertexType) -> Self {
-            Self {
-                voltage,
-                tag,
-                vertex_type,
+        /// Construct a new [`VertexMetadata`]. This constructor guarantees that a
+        /// source or sink node will have a voltage associated, and that internal nodes
+        /// will have [`None`] instead.
+        pub fn new(voltage: Option<T>, tag: u32, vertex_type: VertexType) -> Self {
+            match vertex_type {
+                VertexType::Internal => {
+                    return Self {
+                        voltage: None,
+                        tag,
+                        vertex_type,
+                    };
+                }
+                _ => {
+                    assert!(!voltage.is_none());
+                    return Self {
+                        voltage,
+                        tag,
+                        vertex_type,
+                    };
+                }
             }
         }
     }
@@ -253,7 +268,9 @@ pub mod circuit_graph {
             // Begin by establishing equations for the voltage drop along every source->sink
             // path. (KVL)
             for (i, path) in paths.iter().enumerate() {
-                column.write(i, self.graph.node_weight(path.0).unwrap().voltage);
+                // These unwraps are safe since we know the paths exist and since source nodes
+                // are guaranteed to have a voltage recorded.
+                column.write(i, self.graph.node_weight(path.0).unwrap().voltage.unwrap());
 
                 for edge_index in &path.1 {
                     let edge = self.graph.edge_weight(*edge_index).unwrap();
@@ -295,9 +312,9 @@ mod tests {
 
     #[test]
     fn create_single_vertex() {
-        let v: VertexMetadata<f64> = VertexMetadata::new(1f64, 0, VertexType::Source);
+        let v: VertexMetadata<f64> = VertexMetadata::new(Some(1f64), 0, VertexType::Source);
 
-        assert!(v.voltage == 1f64);
+        assert!(v.voltage.unwrap() == 1f64);
         assert!(v.tag == 0);
         assert!(v.vertex_type == VertexType::Source);
     }
@@ -313,8 +330,8 @@ mod tests {
 
     #[test]
     fn create_graph() {
-        let v1 = VertexMetadata::new(1.0, 1, VertexType::Source);
-        let v2 = VertexMetadata::new(0.0, 2, VertexType::Sink);
+        let v1 = VertexMetadata::new(Some(1.0), 1, VertexType::Source);
+        let v2 = VertexMetadata::new(Some(0.0), 2, VertexType::Sink);
 
         let e = EdgeMetadata::new(1, 2, 2.0);
 
@@ -335,8 +352,8 @@ mod tests {
     /// ----------------
     /// ```
     fn create_simple_circuit() -> Circuit<f64> {
-        let source = VertexMetadata::new(3.0, 0, VertexType::Source);
-        let sink = VertexMetadata::new(0.0, 1, VertexType::Sink);
+        let source = VertexMetadata::new(Some(3.0), 0, VertexType::Source);
+        let sink = VertexMetadata::new(Some(0.0), 1, VertexType::Sink);
 
         let edge = EdgeMetadata::new(0, 1, 0.5);
 
@@ -354,7 +371,7 @@ mod tests {
             .node_weights()
             .find(|v| v.vertex_type == VertexType::Source)
             .unwrap();
-        assert!(source.voltage == 3.0);
+        assert!(source.voltage.unwrap() == 3.0);
     }
 
     /// Test that the correct number of unknown currents and voltages are being reported.
@@ -404,11 +421,11 @@ mod tests {
     /// ------------------------
     /// ```
     fn create_complex_circuit() -> Circuit<f64> {
-        let source = VertexMetadata::new(2.0, 0, VertexType::Source);
+        let source = VertexMetadata::new(Some(2.0), 0, VertexType::Source);
 
-        let v1 = VertexMetadata::new(-1.0, 1, VertexType::Internal);
+        let v1 = VertexMetadata::new(None, 1, VertexType::Internal);
 
-        let sink = VertexMetadata::new(0.0, 2, VertexType::Sink);
+        let sink = VertexMetadata::new(Some(0.0), 2, VertexType::Sink);
 
         let e1 = EdgeMetadata::new(0, 1, 1.0);
         let e2 = EdgeMetadata::new(1, 2, 1.0);
@@ -428,7 +445,7 @@ mod tests {
             .find(|v| v.vertex_type == VertexType::Source)
             .unwrap();
 
-        assert_eq!(source.voltage, 2.0);
+        assert_eq!(source.voltage.unwrap(), 2.0);
     }
 
     /// Test that the correct number of unknowns are reported.
@@ -480,12 +497,12 @@ mod tests {
     /// ------------------------
     /// ```
     fn create_series_circuit() -> Circuit<f64> {
-        let source = VertexMetadata::new(2.0, 0, VertexType::Source);
+        let source = VertexMetadata::new(Some(2.0), 0, VertexType::Source);
 
-        let v1 = VertexMetadata::new(-1.0, 1, VertexType::Internal);
-        let v2 = VertexMetadata::new(-1.0, 2, VertexType::Internal);
+        let v1 = VertexMetadata::new(None, 1, VertexType::Internal);
+        let v2 = VertexMetadata::new(None, 2, VertexType::Internal);
 
-        let sink = VertexMetadata::new(0.0, 3, VertexType::Sink);
+        let sink = VertexMetadata::new(Some(0.0), 3, VertexType::Sink);
 
         let e1 = EdgeMetadata::new(0, 1, 1.0);
         let e2 = EdgeMetadata::new(1, 3, 1.0);
@@ -550,13 +567,13 @@ mod tests {
     fn create_multiple_source_circuit() -> Circuit<f64> {
         // Note that source0 represents the node at the very top left of the circuit,
         // and thus has the combined voltage of both the circuit's voltage sources.
-        let source0 = VertexMetadata::new(5.0, 0, VertexType::Source);
-        let source1 = VertexMetadata::new(2.0, 1, VertexType::Source);
+        let source0 = VertexMetadata::new(Some(5.0), 0, VertexType::Source);
+        let source1 = VertexMetadata::new(Some(2.0), 1, VertexType::Source);
 
-        let v0 = VertexMetadata::new(-1.0, 2, VertexType::Internal);
-        let v1 = VertexMetadata::new(-1.0, 3, VertexType::Internal);
+        let v0 = VertexMetadata::new(None, 2, VertexType::Internal);
+        let v1 = VertexMetadata::new(None, 3, VertexType::Internal);
 
-        let sink = VertexMetadata::new(0.0, 4, VertexType::Sink);
+        let sink = VertexMetadata::new(Some(0.0), 4, VertexType::Sink);
 
         let e0 = EdgeMetadata::new(0, 2, 1.0);
         let e1 = EdgeMetadata::new(2, 3, 1.0);
