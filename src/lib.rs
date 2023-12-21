@@ -730,7 +730,11 @@ mod tests {
         circuit.solve_currents();
         circuit.solve_voltages();
 
-        let voltages: Vec<f64> = circuit.graph.node_weights().map(|weight| weight.voltage.unwrap()).collect();
+        let voltages: Vec<f64> = circuit
+            .graph
+            .node_weights()
+            .map(|weight| weight.voltage.unwrap())
+            .collect();
 
         assert!(voltages[0] - 5.0 < 1e-10);
         assert!(voltages[1] - 2.0 < 1e-10);
