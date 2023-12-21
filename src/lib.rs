@@ -314,7 +314,7 @@ pub mod circuit_graph {
         /// the currents belonging to those groups of edges.
         ///
         /// Returns nothing as the voltages are set on each node's [`VertexMetadata`].
-        pub fn solve_voltages(&mut self, currents: Col<T>) {
+        pub fn solve_voltages(&mut self, currents: &Col<T>) {
             // We ignore the possible error here since for it to occur, there would
             // need to be a cycle in the graph, which would have mucked up finding
             // the currents in the first place, and shouldn't occur anyway.
@@ -527,7 +527,7 @@ mod tests {
         let mut circuit = create_complex_circuit();
 
         let solved_currents = circuit.solve_currents();
-        circuit.solve_voltages(solved_currents);
+        circuit.solve_voltages(&solved_currents);
 
         let node = circuit.graph.node_weights().find(|node| node.vertex_type == VertexType::Internal).unwrap();
 
@@ -599,7 +599,7 @@ mod tests {
         let mut circuit = create_series_circuit();
 
         let solved_currents = circuit.solve_currents();
-        circuit.solve_voltages(solved_currents);
+        circuit.solve_voltages(&solved_currents);
 
         let voltages: Vec<f64> = circuit.graph.node_weights().map(|weight| weight.voltage.unwrap()).collect();
 
