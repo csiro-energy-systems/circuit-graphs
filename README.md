@@ -1,6 +1,6 @@
 # circuit-graphs
 
-This project is a passive circuit analysis tool using a graph representation (the [discrete maths kind][graphs_wiki], not the chart/plot kind). At present, it is possible to create a circuit from a set of nodes and edges, where every edge represents a resistor, and then solve for the current along every edge and voltage at every node. Features to come include:
+This project is a passive circuit analysis tool using a graph representation (the [discrete maths kind][graphs], not the chart/plot kind). At present, it is possible to create a circuit from a set of nodes and edges, where every edge represents a resistor, and then solve for the current along every edge and voltage at every node. Features to come include:
 
 * AC voltage/current support
 * Support for capacitors/inductors (generalised impedance)
@@ -64,4 +64,4 @@ let circuit = Circuit::new(
 )
 ```
 
-[graphs_wiki]: (https://en.wikipedia.org/wiki/Graph_(discrete_mathematics))
+[graphs]: (https://en.wikipedia.org/wiki/Graph_(discrete_mathematics))
