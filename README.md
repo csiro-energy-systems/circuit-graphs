@@ -64,4 +64,4 @@ let circuit = Circuit::new(
 )
 ```
 
-[graphs]: (https://en.wikipedia.org/wiki/Graph_(discrete_mathematics))
+[graphs]: <https://en.wikipedia.org/wiki/Graph_(discrete_mathematics)>
