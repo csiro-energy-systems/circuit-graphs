@@ -1,6 +1,10 @@
 # circuit-graphs
 
-This project is a passive circuit analysis tool using a graph representation (the [discrete maths kind][graphs], not the chart/plot kind). At present, it is possible to create a circuit from a set of nodes and edges, where every edge represents a resistor, and then solve for the current along every edge and voltage at every node. Features to come include:
+This project is a passive circuit analysis tool using a graph representation
+(the [discrete maths kind][graphs], not the chart/plot kind). At present, it is
+possible to create a circuit from a set of vertices and edges, where every edge
+represents a resistor, and then solve for the current along every edge and
+voltage at every vertex. Features to come include:
 
 * AC voltage/current support
 * Support for capacitors/inductors (generalised impedance)
@@ -9,33 +13,32 @@ This project is a passive circuit analysis tool using a graph representation (th
 ## Usage Example
 
 Let us create the following circuit:
-
 ```
-----__R__-------__R__---
-|   1ohm   |    0.5ohm |
-|+        | |         | |
-V 2   1ohm|R|     2ohm|R|
-|-        | |         | |
-|          |           |
-------------------------
+┌──═════───┬────═════──┐
+│    1Ω    │    0.5Ω   │
+│+         ║           ║ 
+◯ 2V    1Ω ║        2Ω ║
+│-         ║           ║
+│          │           │
+└──────────┴───────────┘
 ```
 
-We begin by choosing the reference node to be that at the bottom of the circuit diagram. Also, I have below labeled the nodes with an index for clarity.
-
+We begin by choosing the reference vertx to be that at the bottom of the circuit
+diagram. Vertices have been labelled with an index for clarity, but the values
+are unimportant:
 ```
 0          1           2
-----__R__-------__R__---
-|   1ohm   |    0.5ohm |
-|+        | |         | |
-V 2   1ohm|R|     2ohm|R|
-|-        | |         | |
-|          |           |
-------------------------
+┌──═════───┬────═════──┐
+│    1Ω    │    0.5Ω   │
+│+         ║           ║ 
+◯ 2V    1Ω ║        2Ω ║
+│-         ║           ║
+│          │           │
+└──────────┴───────────┘
            3
 ```
 
-We can now create the nodes.
-
+Create the vertices:
 ```rust
 let source = VertexMetadata::new(Some(2.0), 0, VertexType::Source);
 
@@ -45,18 +48,22 @@ let v2 = VertexMetadata::new(None, 2, VertexType::Internal);
 let sink = VertexMetadata::new(Some(0.0), 3, VertexType::Sink);
 ```
 
-Observe that all nodes are marked with a tag and type. Sources and sinks must have a voltage provided, however no matter what is supplied for an internal vertex at instantiation, it will be initialised to `None`.
+All vertices are marked with a tag and type. Sources and sinks must have a
+voltage provided, however no matter what (voltage) value is supplied for an
+internal vertex at instantiation, it will be initialised to `None`.
 
-With these set we can now create the edges. These use the tags we just set on the vertices.
-
+Now create the edges using the tags from the vertices:
 ```rust
 let e0 = EdgeMetadata::new(0, 1, 1.0);
 let e1 = EdgeMetadata::new(1, 2, 2.0);
 let e2 = EdgeMetadata::new(2, 3, 0.5);
 let e3 = EdgeMetadata::new(1, 3, 1.0);
 ```
-Observe that each edge requires the tag of its tail and head vertices, as well as its *conductance*, not resistance. Finally we can create the circuit:
 
+Each edge requires the tag of its tail and head vertices, as well as the
+*conductance* (not resistance) of the resistor.
+
+Finally, create the circuit:
 ```rust
 let circuit = Circuit::new(
     vec![source, v1, v2, sink],
