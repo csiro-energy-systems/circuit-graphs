@@ -14,28 +14,28 @@ voltage at every vertex. Features to come include:
 
 Let us create the following circuit:
 ```script
-┌──═════───┬────═════──┐
-│    1Ω    │    0.5Ω   │
-│+         ║           ║ 
-◯ 2V   1Ω ║        2Ω ║
-│-         ║           ║
-│          │           │
-└──────────┴───────────┘
+   ┌──═════───┬────═════──┐
+   │    1Ω    │    0.5Ω   │
+   │+         ║           ║ 
+2V ◯      1Ω ║        2Ω ║
+   │-         ║           ║
+   │          │           │
+   └──────────┴───────────┘
 ```
 
 We begin by choosing the reference vertx to be that at the bottom of the circuit
 diagram. Vertices have been labelled with an index for clarity, but the values
 are unimportant:
 ```script
-0          1           2
-┌──═════───┬────═════──┐
-│    1Ω    │    0.5Ω   │
-│+         ║           ║ 
-◯ 2V   1Ω ║        2Ω ║
-│-         ║           ║
-│          │           │
-└──────────┴───────────┘
-           3
+   0          1           2
+   ┌──═════───┬────═════──┐
+   │    1Ω    │    0.5Ω   │
+   │+         ║           ║ 
+2V ◯      1Ω ║        2Ω ║
+   │-         ║           ║
+   │          │           │
+   └──────────┴───────────┘
+              3
 ```
 
 Create the vertices:
