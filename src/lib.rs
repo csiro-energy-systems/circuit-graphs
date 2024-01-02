@@ -47,17 +47,17 @@ pub mod circuit_graph {
     pub struct EdgeMetadata<T> {
         pub tail: u32,
         pub head: u32,
-        pub conductance: T,
+        pub admittance: T,
         current_id: Option<usize>,
         pub current: Option<T>,
     }
 
     impl<T> EdgeMetadata<T> {
-        pub fn new(tail: u32, head: u32, conductance: T) -> Self {
+        pub fn new(tail: u32, head: u32, admittance: T) -> Self {
             Self {
                 tail,
                 head,
-                conductance,
+                admittance,
                 current_id: None,
                 current: None,
             }
@@ -65,10 +65,14 @@ pub mod circuit_graph {
     }
 
     /// A struct representing a passive circuit. It relies on a flow graph where
-    ///  - vertices are annotated with a [`VertexType`]
-    ///  - vertices are annotated with a voltage
-    ///  - edges are annotated with a weight equal to the conductance of the
-    /// component (reciprocal of resistance).
+    ///  - vertices are annotated with a [`VertexType`],
+    ///  - vertices are annotated with a voltage, and
+    ///  - edges are annotated with a weight equal to the admittance (inverse of
+    /// impedance) of the component they represent.
+    ///
+    /// While the use of 'admittance' implies a complex value, using a float
+    /// type will work also for DC circuits or in theory purely resistive
+    /// circuits.
     pub struct Circuit<T> {
         pub graph: DiGraph<VertexMetadata<T>, EdgeMetadata<T>>,
     }
@@ -100,9 +104,10 @@ pub mod circuit_graph {
         /// distinct currents which need to be found in the circuit.
         pub fn determine_unknown_currents(&mut self) -> usize {
             // This method uses the fact that every edge of the graph corresponds to a
-            // resistor whose current we want to find, but that resistors in series (which
+            // component whose current we want to find, but that components in series (which
             // can be uniquely associated with vertices having deg_in = deg_out = 1)
-            // need to be uncounted since any group all share the same current.
+            // need to be uncounted since any group all share the same current. Such nodes
+            // are found here:
             let series_nodes: Vec<NodeIndex> = self
                 .graph
                 .node_indices()
@@ -284,7 +289,7 @@ pub mod circuit_graph {
                     let current_index = edge.current_id.unwrap();
                     // Add on this edge's contribution to what's there, it might be in series
                     let current_val = coeffs.read(i, current_index);
-                    coeffs.write(i, current_index, edge.conductance.faer_inv() + current_val);
+                    coeffs.write(i, current_index, edge.admittance.faer_inv() + current_val);
                 }
             }
 
@@ -358,7 +363,7 @@ pub mod circuit_graph {
 
                 let new_voltage = Some(
                     prior_voltage
-                        - edge_weight.current.unwrap() * edge_weight.conductance.faer_inv(),
+                        - edge_weight.current.unwrap() * edge_weight.admittance.faer_inv(),
                 );
 
                 let weight = self.graph.node_weight_mut(node_index).unwrap();
@@ -372,6 +377,9 @@ pub mod circuit_graph {
 #[cfg(test)]
 mod tests {
     use crate::circuit_graph::*;
+
+    use faer_core::c64;
+    use faer_entity::ComplexField;
 
     #[test]
     fn create_single_vertex() {
@@ -388,7 +396,7 @@ mod tests {
 
         assert!(e.tail == 0);
         assert!(e.head == 1);
-        assert!(e.conductance == 0.5);
+        assert!(e.admittance == 0.5);
     }
 
     #[test]
@@ -741,5 +749,67 @@ mod tests {
         assert!(voltages[2] - 29.0 / 11.0 < 1e-10);
         assert!(voltages[3] - 16.0 / 11.0 < 1e-10);
         assert!(voltages[4] - 0.0 < 1e-10);
+    }
+
+    /// Set up an AC circuit.
+    ///
+    /// ```raw
+    /// ------|C(------
+    /// |   -j2ohm    |
+    /// |+            $
+    /// |V 4    j1ohm I
+    /// |-            $
+    /// |    _____    |
+    /// -----__R__-----
+    ///       2ohm
+    /// ```
+    fn create_ac_circuit() -> Circuit<c64> {
+        let source = VertexMetadata::new(Some(c64::new(4.0, 0.0)), 0, VertexType::Source);
+        let v1 = VertexMetadata::new(None, 1, VertexType::Internal);
+        let v2 = VertexMetadata::new(None, 2, VertexType::Internal);
+        let sink = VertexMetadata::new(Some(c64::faer_zero()), 3, VertexType::Sink);
+
+        let e1 = EdgeMetadata::new(0, 1, c64::new(0.0, 0.5));
+        let e2 = EdgeMetadata::new(1, 2, c64::new(0.0, -1.0));
+        let e3 = EdgeMetadata::new(2, 3, c64::new(0.5, 0.0));
+
+        Circuit::new(vec![source, v1, v2, sink], vec![e1, e2, e3])
+    }
+
+    /// Test that the correct currents are found.
+    #[test]
+    fn test_ac_currents() {
+        let mut circuit = create_ac_circuit();
+
+        circuit.solve_currents();
+
+        let solved_currents: Vec<c64> = circuit
+            .graph
+            .edge_weights()
+            .map(|weight| weight.current.unwrap())
+            .collect();
+
+        for current in solved_currents {
+            assert!((current - c64::new(8.0 / 5.0, 4.0 / 5.0)).faer_abs() < 1e-10);
+        }
+    }
+
+    /// Test that the correct voltages are found.
+    #[test]
+    fn test_ac_voltages() {
+        let mut circuit = create_ac_circuit();
+
+        circuit.solve_voltages();
+
+        let solved_voltages: Vec<c64> = circuit
+            .graph
+            .node_weights()
+            .map(|weight| weight.voltage.unwrap())
+            .collect();
+
+        assert!((solved_voltages[0] - c64::new(4.0, 0.0)).faer_abs() < 1e-10);
+        assert!((solved_voltages[1] - c64::new(12.0 / 5.0, 16.0 / 5.0)).faer_abs() < 1e-10);
+        assert!((solved_voltages[2] - c64::new(16.0 / 5.0, 8.0 / 5.0)).faer_abs() < 1e-10);
+        assert!((solved_voltages[3] - c64::faer_zero()).faer_abs() < 1e-10);
     }
 }
