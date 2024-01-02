@@ -44,6 +44,19 @@ pub mod circuit_graph {
         }
     }
 
+    /// A struct to hold the informatino for an edge in the graph.
+    ///
+    /// An edge represents a component in a circuit, which may be purely
+    /// resistive, capacitative, or inductive, or some combination of the three.
+    /// In any case, the admittance must be provided as a single value, whether
+    /// that is a float (or some other real value) or a complex type. Complex
+    /// values should be provided as `G + jB` where
+    /// - `G` is conductance (real-valued),
+    /// - `B` is susceptance (real-valued), and
+    /// - `j` is the imaginary unit.
+    ///
+    /// In particular, the `c64` or `c32` types from `faer` are recommended for
+    /// best performance.
     pub struct EdgeMetadata<T> {
         pub tail: u32,
         pub head: u32,
@@ -53,6 +66,10 @@ pub mod circuit_graph {
     }
 
     impl<T> EdgeMetadata<T> {
+        /// Constructs a new [`EdgeMetadata`] with the provided tail and head indices
+        /// and admittance.
+        ///
+        /// See the [`EdgeMetadata`] documentation for details on admittance values.
         pub fn new(tail: u32, head: u32, admittance: T) -> Self {
             Self {
                 tail,
@@ -70,9 +87,10 @@ pub mod circuit_graph {
     ///  - edges are annotated with a weight equal to the admittance (inverse of
     /// impedance) of the component they represent.
     ///
-    /// While the use of 'admittance' implies a complex value, using a float
-    /// type will work also for DC circuits or in theory purely resistive
-    /// circuits.
+    /// While the use of 'admittance' implies a complex value, using a real type
+    /// will work also for DC circuits or, in theory, purely resistive circuits.
+    /// Complex admittance values should be in `G + jB` format; see the
+    /// [`EdgeMetadata`] documentation for details.
     pub struct Circuit<T> {
         pub graph: DiGraph<VertexMetadata<T>, EdgeMetadata<T>>,
     }
