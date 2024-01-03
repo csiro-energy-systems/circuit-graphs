@@ -19,6 +19,7 @@ pub mod circuit_graph {
         pub voltage: Option<T>,
         pub tag: u32,
         pub vertex_type: VertexType,
+        power: Option<T>,
     }
 
     impl<T> VertexMetadata<T> {
@@ -31,6 +32,7 @@ pub mod circuit_graph {
                     voltage: None,
                     tag,
                     vertex_type,
+                    power: None,
                 },
                 _ => {
                     assert!(!voltage.is_none());
@@ -38,6 +40,7 @@ pub mod circuit_graph {
                         voltage,
                         tag,
                         vertex_type,
+                        power: None,
                     }
                 }
             }
@@ -63,6 +66,7 @@ pub mod circuit_graph {
         pub admittance: T,
         current_id: Option<usize>,
         pub current: Option<T>,
+        power: Option<T>,
     }
 
     impl<T> EdgeMetadata<T> {
@@ -77,6 +81,7 @@ pub mod circuit_graph {
                 admittance,
                 current_id: None,
                 current: None,
+                power: None,
             }
         }
     }
@@ -387,6 +392,101 @@ pub mod circuit_graph {
                 let weight = self.graph.node_weight_mut(node_index).unwrap();
 
                 weight.voltage = new_voltage;
+            }
+        }
+
+        /// Find the power consumed by an edge.
+        ///
+        /// For complex-valued systems, the returned value will be in the form
+        /// `P + jQ` where
+        /// - `P` is real power,
+        /// - `Q` is reactive power, and
+        /// - `j` is the imaginary unit.
+        ///
+        /// Returns [`None`] iff the provided `edge_index` doesn't exist in the graph.
+        pub fn power_on_edge(&mut self, edge_index: EdgeIndex) -> Option<T> {
+            let raw_edge = self.graph.edge_weight(edge_index);
+
+            if raw_edge.is_none() {
+                return None;
+            }
+
+            let edge = raw_edge.unwrap();
+
+            if !edge.power.is_none() {
+                return edge.power;
+            }
+
+            if edge.current.is_none() {
+                self.solve_currents();
+            }
+
+            let edge = self.graph.edge_weight(edge_index).unwrap();
+
+            let power =
+                edge.current.unwrap().faer_mul(edge.current.unwrap()) * edge.admittance.faer_inv();
+
+            let edge = self.graph.edge_weight_mut(edge_index).unwrap();
+            edge.power = Some(power);
+
+            Some(power)
+        }
+
+        /// Find the power available at any given node.
+        ///
+        /// For complex-valued systems, the returned value will be in the form
+        /// `P + jQ` where
+        /// - `P` is real power,
+        /// - `Q` is reactive power, and
+        /// - `j` is the imaginary unit.
+        ///
+        /// Returns [`None`] iff the provided `node_index` does not actually exist
+        /// in the graph.
+        pub fn power_at_node(&mut self, node_index: NodeIndex) -> Option<T> {
+            let raw_node = self.graph.node_weight(node_index);
+
+            if raw_node.is_none() {
+                return None;
+            }
+
+            let node = raw_node.unwrap();
+
+            if !node.power.is_none() {
+                return node.power;
+            }
+
+            if node.voltage.is_none() {
+                self.solve_voltages();
+            }
+
+            let node = self.graph.node_weight(node_index).unwrap();
+
+            let power = node.voltage.unwrap()
+                * self
+                    .graph
+                    .edges_directed(node_index, Outgoing)
+                    .map(|edge| edge.weight().current.unwrap())
+                    .fold(T::faer_zero(), |a, b| a + b);
+
+            let node = self.graph.node_weight_mut(node_index).unwrap();
+            node.power = Some(power);
+
+            Some(power)
+        }
+
+        /// Eagerly compute the power consumption on every edge, and the power
+        /// available at every node.
+        ///
+        /// The resulting values are stored on the [`VertexMetadata`] and
+        /// [`EdgeMetadata`] objects, but can be accessed through the
+        /// `current_on_edge()` and `current_at_node()` methods.
+        pub fn compute_power(&mut self) {
+            for edge_index in self.graph.edge_indices() {
+                _ = self.power_on_edge(edge_index);
+            }
+
+            for node_index in self.graph.node_indices() {
+                _ = self.power_at_node(node_index);
             }
         }
     }
