@@ -404,7 +404,7 @@ pub mod circuit_graph {
         /// - `j` is the imaginary unit.
         ///
         /// Returns [`None`] iff the provided `edge_index` doesn't exist in the graph.
-        pub fn power_on_edge(&mut self, edge_index: EdgeIndex) -> Option<T> {
+        pub fn get_power_on_edge(&mut self, edge_index: EdgeIndex) -> Option<T> {
             let raw_edge = self.graph.edge_weight(edge_index);
 
             if raw_edge.is_none() {
@@ -442,7 +442,7 @@ pub mod circuit_graph {
         ///
         /// Returns [`None`] iff the provided `node_index` does not actually exist
         /// in the graph.
-        pub fn power_at_node(&mut self, node_index: NodeIndex) -> Option<T> {
+        pub fn get_power_at_node(&mut self, node_index: NodeIndex) -> Option<T> {
             let raw_node = self.graph.node_weight(node_index);
 
             if raw_node.is_none() {
@@ -482,11 +482,11 @@ pub mod circuit_graph {
         /// `current_on_edge()` and `current_at_node()` methods.
         pub fn compute_power(&mut self) {
             for edge_index in self.graph.edge_indices() {
-                _ = self.power_on_edge(edge_index);
+                _ = self.get_power_on_edge(edge_index);
             }
 
             for node_index in self.graph.node_indices() {
-                _ = self.power_at_node(node_index);
+                _ = self.get_power_at_node(node_index);
             }
         }
     }
