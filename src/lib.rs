@@ -19,6 +19,7 @@ pub mod circuit_graph {
         pub voltage: Option<T>,
         pub tag: u32,
         pub vertex_type: VertexType,
+        pub power: Option<T>,
     }
 
     impl<T> VertexMetadata<T> {
@@ -31,6 +32,7 @@ pub mod circuit_graph {
                     voltage: None,
                     tag,
                     vertex_type,
+                    power: None,
                 },
                 _ => {
                     assert!(!voltage.is_none());
@@ -38,6 +40,7 @@ pub mod circuit_graph {
                         voltage,
                         tag,
                         vertex_type,
+                        power: None,
                     }
                 }
             }
@@ -63,6 +66,7 @@ pub mod circuit_graph {
         pub admittance: T,
         current_id: Option<usize>,
         pub current: Option<T>,
+        pub power: Option<T>,
     }
 
     impl<T> EdgeMetadata<T> {
@@ -77,6 +81,7 @@ pub mod circuit_graph {
                 admittance,
                 current_id: None,
                 current: None,
+                power: None,
             }
         }
     }
@@ -389,6 +394,79 @@ pub mod circuit_graph {
                 weight.voltage = new_voltage;
             }
         }
+
+        /// Find the power consumed by an edge.
+        ///
+        /// For complex-valued systems, the returned value will be in the form
+        /// `P + jQ` where
+        /// - `P` is real power,
+        /// - `Q` is reactive power, and
+        /// - `j` is the imaginary unit.
+        fn find_power_on_edge(&mut self, edge_index: EdgeIndex) {
+            let Some(edge) = self.graph.edge_weight(edge_index) else {
+                panic!("Tried to access non-existant edge: {:?}", edge_index);
+            };
+
+            if edge.current.is_none() {
+                self.solve_currents();
+            }
+
+            // self was needed as a mutable borrow so we reborrow here
+            let edge = self.graph.edge_weight(edge_index).unwrap();
+
+            let power =
+                edge.current.unwrap().faer_mul(edge.current.unwrap()) * edge.admittance.faer_inv();
+
+            let edge = self.graph.edge_weight_mut(edge_index).unwrap();
+            edge.power = Some(power);
+        }
+
+        /// Find the power available at any given node and store it on the
+        /// [`VertexMetadata`]
+        ///
+        /// For complex-valued systems, the power value will be in the form
+        /// `P + jQ` where
+        /// - `P` is real power,
+        /// - `Q` is reactive power, and
+        /// - `j` is the imaginary unit.
+        fn find_power_at_node(&mut self, node_index: NodeIndex){
+            let Some(node) = self.graph.node_weight(node_index) else {
+                panic!("Tried to access non-existant node: {:?}", node_index);
+            };
+
+            if node.voltage.is_none() {
+                self.solve_voltages();
+            }
+
+            // self was needed as a mutable borrow so we reborrow here
+            let node = self.graph.node_weight(node_index).unwrap();
+
+            let power = node.voltage.unwrap()
+                * self
+                    .graph
+                    .edges_directed(node_index, Outgoing)
+                    .map(|edge| edge.weight().current.unwrap())
+                    .fold(T::faer_zero(), |a, b| a + b);
+
+            let node = self.graph.node_weight_mut(node_index).unwrap();
+            node.power = Some(power);
+        }
+
+        /// Eagerly compute the power consumption on every edge, and the power
+        /// available at every node.
+        ///
+        /// The resulting values are stored on the [`VertexMetadata`] and
+        /// [`EdgeMetadata`] objects, but can be accessed through the
+        /// `current_on_edge()` and `current_at_node()` methods.
+        pub fn compute_power(&mut self) {
+            for edge_index in self.graph.edge_indices() {
+                self.find_power_on_edge(edge_index);
+            }
+
+            for node_index in self.graph.node_indices() {
+                self.find_power_at_node(node_index);
+            }
+        }
     }
 }
 
@@ -496,6 +574,21 @@ mod tests {
         assert!(solved_currents[0] - 1.5 < 1e-10);
     }
 
+    /// Test that the correct power value is found.
+    #[test]
+    fn test_simple_solved_power() {
+        let mut circuit = create_simple_circuit();
+
+        circuit.compute_power();
+        let solved_power: Vec<f64> = circuit
+            .graph
+            .edge_weights()
+            .map(|weight| weight.power.unwrap())
+            .collect();
+
+        assert!(solved_power[0] - 4.5 < 1e-10);
+    }
+
     /// Set up a slightly more complex circuit:
     ///
     /// ```raw
@@ -588,6 +681,34 @@ mod tests {
         assert!(node.voltage.unwrap() - 0.5 < 1e-10);
     }
 
+    /// Test that the correct power drop along each edge and supply at each node
+    /// are found.
+    #[test]
+    fn test_complex_solved_power() {
+        let mut circuit = create_complex_circuit();
+
+        circuit.compute_power();
+
+        let edge_powers: Vec<f64> = circuit
+            .graph
+            .edge_weights()
+            .map(|weight| weight.power.unwrap())
+            .collect();
+        let node_power = circuit
+            .graph
+            .node_weights()
+            .find(|node| node.vertex_type == VertexType::Internal)
+            .unwrap()
+            .power
+            .unwrap();
+
+        assert!(edge_powers[0] - 2.25 < 1e-10);
+        assert!(edge_powers[1] - 0.25 < 1e-10);
+        assert!(edge_powers[2] - 0.5 < 1e-10);
+
+        assert!(node_power - 0.75 < 1e-10);
+    }
+
     /// Set up a more complex circuit with series components
     ///
     /// ```raw
@@ -671,6 +792,35 @@ mod tests {
         assert!(voltages[1] - 5.0 / 6.0 < 1e-10);
         assert!(voltages[2] - 2.0 / 3.0 < 1e-10);
         assert!(voltages[3] - 0.0 < 1e-10);
+    }
+
+    /// Test that the correct power values have been found.
+    #[test]
+    fn test_series_solve_power() {
+        let mut circuit = create_series_circuit();
+
+        circuit.compute_power();
+
+        let edge_powers: Vec<f64> = circuit
+            .graph
+            .edge_weights()
+            .map(|weight| weight.power.unwrap())
+            .collect();
+        let node_powers: Vec<f64> = circuit
+            .graph
+            .node_weights()
+            .map(|weight| weight.power.unwrap())
+            .collect();
+
+        assert!(edge_powers[0] - 49.0 / 36.0 < 1e-10);
+        assert!(edge_powers[1] - 25.0 / 36.0 < 1e-10);
+        assert!(edge_powers[2] - 2.0 / 9.0 < 1e-10);
+        assert!(edge_powers[3] - 2.0 / 9.0 < 1e-10);
+
+        assert!(node_powers[0] - 7.0 / 3.0 < 1e-10);
+        assert!(node_powers[1] - 5.0 / 4.0 < 1e-10);
+        assert!(node_powers[2] - 4.0 / 3.0 < 1e-10);
+        assert!(node_powers[3] - 0.0 < 1e-10);
     }
 
     /// Set up a circuit with multiple source and sink nodes. The location of ground
@@ -769,6 +919,38 @@ mod tests {
         assert!(voltages[4] - 0.0 < 1e-10);
     }
 
+    /// Test that the correct power values are found.
+    #[test]
+    fn test_multiple_solved_power() {
+        let mut circuit = create_multiple_source_circuit();
+
+        circuit.compute_power();
+
+        let edge_powers: Vec<f64> = circuit
+            .graph
+            .edge_weights()
+            .map(|weight| weight.power.unwrap())
+            .collect();
+        let node_powers: Vec<f64> = circuit
+            .graph
+            .node_weights()
+            .map(|weight| weight.power.unwrap())
+            .collect();
+
+        assert!(edge_powers[0] - 676.0 / 121.0 < 1e-10);
+        assert!(edge_powers[1] - 169.0 / 121.0 < 1e-10);
+        assert!(edge_powers[2] - 169.0 / 121.0 < 1e-10);
+        assert!(edge_powers[3] - 36.0 / 121.0 < 1e-10);
+        assert!(edge_powers[4] - 256.0 / 121.0 < 1e-10);
+        assert!(edge_powers[5] - 256.0 / 121.0 < 1e-10);
+
+        assert!(node_powers[0] - 130.0 / 11.0 < 1e-10);
+        assert!(node_powers[1] - 18.0 / 11.0 < 1e-10);
+        assert!(node_powers[2] - 754.0 / 121.0 < 1e-10);
+        assert!(node_powers[3] - 512.0 / 121.0 < 1e-10);
+        assert!(node_powers[4] - 0.0 < 1e-10);
+    }
+
     /// Set up an AC circuit.
     ///
     /// ```raw
@@ -808,7 +990,7 @@ mod tests {
             .collect();
 
         for current in solved_currents {
-            assert!((current - c64::new(8.0 / 5.0, 4.0 / 5.0)).faer_abs() < 1e-10);
+            assert!((current - c64::new(8.0 / 5.0, 4.0 / 5.0)).abs() < 1e-10);
         }
     }
 
@@ -825,9 +1007,37 @@ mod tests {
             .map(|weight| weight.voltage.unwrap())
             .collect();
 
-        assert!((solved_voltages[0] - c64::new(4.0, 0.0)).faer_abs() < 1e-10);
-        assert!((solved_voltages[1] - c64::new(12.0 / 5.0, 16.0 / 5.0)).faer_abs() < 1e-10);
-        assert!((solved_voltages[2] - c64::new(16.0 / 5.0, 8.0 / 5.0)).faer_abs() < 1e-10);
-        assert!((solved_voltages[3] - c64::faer_zero()).faer_abs() < 1e-10);
+        assert!((solved_voltages[0] - c64::new(4.0, 0.0)).abs() < 1e-10);
+        assert!((solved_voltages[1] - c64::new(12.0 / 5.0, 16.0 / 5.0)).abs() < 1e-10);
+        assert!((solved_voltages[2] - c64::new(16.0 / 5.0, 8.0 / 5.0)).abs() < 1e-10);
+        assert!((solved_voltages[3] - c64::faer_zero()).abs() < 1e-10);
+    }
+
+    /// Test that the correct power values are found.
+    #[test]
+    fn test_ac_power() {
+        let mut circuit = create_ac_circuit();
+
+        circuit.compute_power();
+
+        let edge_powers: Vec<c64> = circuit
+            .graph
+            .edge_weights()
+            .map(|weight| weight.power.unwrap())
+            .collect();
+        let node_powers: Vec<c64> = circuit
+            .graph
+            .node_weights()
+            .map(|weight| weight.power.unwrap())
+            .collect();
+
+        assert!((edge_powers[0] - c64::new(128.0 / 25.0, -96.0 / 25.0)).abs() < 1e-10);
+        assert!((edge_powers[1] - c64::new(-64.0 / 25.0, 48.0 / 25.0)).abs() < 1e-10);
+        assert!((edge_powers[2] - c64::new(96.0 / 25.0, 128.0 / 25.0)).abs() < 1e-10);
+
+        assert!((node_powers[0] - c64::new(32.0 / 5.0, 16.0 / 5.0)).abs() < 1e-10);
+        assert!((node_powers[1] - c64::new(32.0 / 25.0, 176.0 / 25.0)).abs() < 1e-10);
+        assert!((node_powers[2] - c64::new(96.0 / 25.0, 128.0 / 25.0)).abs() < 1e-10);
+        assert!((node_powers[3] - c64::faer_zero()).abs() < 1e-10);
     }
 }
