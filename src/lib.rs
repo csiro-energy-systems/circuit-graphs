@@ -406,10 +406,10 @@ pub mod circuit_graph {
         /// Returns [`None`] iff the provided `edge_index` doesn't exist in the graph.
         pub fn get_power_on_edge(&mut self, edge_index: EdgeIndex) -> Option<T> {
             let Some(edge) = self.graph.edge_weight(edge_index) else {
-                return None;
+                return None
             };
 
-            if !edge.power.is_none() {
+            if edge.power.is_some() {
                 return edge.power;
             }
 
@@ -417,6 +417,7 @@ pub mod circuit_graph {
                 self.solve_currents();
             }
 
+            // self was needed as a mutable borrow so we reborrow here
             let edge = self.graph.edge_weight(edge_index).unwrap();
 
             let power =
@@ -440,10 +441,10 @@ pub mod circuit_graph {
         /// in the graph.
         pub fn get_power_at_node(&mut self, node_index: NodeIndex) -> Option<T> {
             let Some(node) = self.graph.node_weight(node_index) else {
-                return None;
+                return None
             };
 
-            if !node.power.is_none() {
+            if node.power.is_some() {
                 return node.power;
             }
 
@@ -451,6 +452,7 @@ pub mod circuit_graph {
                 self.solve_voltages();
             }
 
+            // self was needed as a mutable borrow so we reborrow here
             let node = self.graph.node_weight(node_index).unwrap();
 
             let power = node.voltage.unwrap()
