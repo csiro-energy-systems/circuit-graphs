@@ -402,16 +402,10 @@ pub mod circuit_graph {
         /// - `P` is real power,
         /// - `Q` is reactive power, and
         /// - `j` is the imaginary unit.
-        ///
-        /// Returns [`None`] iff the provided `edge_index` doesn't exist in the graph.
-        pub fn get_power_on_edge(&mut self, edge_index: EdgeIndex) -> Option<T> {
+        fn find_power_on_edge(&mut self, edge_index: EdgeIndex) {
             let Some(edge) = self.graph.edge_weight(edge_index) else {
-                return None
+                panic!("Tried to access non-existant edge: {:?}", edge_index);
             };
-
-            if edge.power.is_some() {
-                return edge.power;
-            }
 
             if edge.current.is_none() {
                 self.solve_currents();
@@ -425,28 +419,20 @@ pub mod circuit_graph {
 
             let edge = self.graph.edge_weight_mut(edge_index).unwrap();
             edge.power = Some(power);
-
-            Some(power)
         }
 
-        /// Find the power available at any given node.
+        /// Find the power available at any given node and store it on the
+        /// [`VertexMetadata`]
         ///
-        /// For complex-valued systems, the returned value will be in the form
+        /// For complex-valued systems, the power value will be in the form
         /// `P + jQ` where
         /// - `P` is real power,
         /// - `Q` is reactive power, and
         /// - `j` is the imaginary unit.
-        ///
-        /// Returns [`None`] iff the provided `node_index` does not actually exist
-        /// in the graph.
-        pub fn get_power_at_node(&mut self, node_index: NodeIndex) -> Option<T> {
+        fn find_power_at_node(&mut self, node_index: NodeIndex){
             let Some(node) = self.graph.node_weight(node_index) else {
-                return None
+                panic!("Tried to access non-existant node: {:?}", node_index);
             };
-
-            if node.power.is_some() {
-                return node.power;
-            }
 
             if node.voltage.is_none() {
                 self.solve_voltages();
@@ -464,8 +450,6 @@ pub mod circuit_graph {
 
             let node = self.graph.node_weight_mut(node_index).unwrap();
             node.power = Some(power);
-
-            Some(power)
         }
 
         /// Eagerly compute the power consumption on every edge, and the power
@@ -476,11 +460,11 @@ pub mod circuit_graph {
         /// `current_on_edge()` and `current_at_node()` methods.
         pub fn compute_power(&mut self) {
             for edge_index in self.graph.edge_indices() {
-                _ = self.get_power_on_edge(edge_index);
+                self.find_power_on_edge(edge_index);
             }
 
             for node_index in self.graph.node_indices() {
-                _ = self.get_power_at_node(node_index);
+                self.find_power_at_node(node_index);
             }
         }
     }
