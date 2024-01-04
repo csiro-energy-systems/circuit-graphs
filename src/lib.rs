@@ -429,7 +429,7 @@ pub mod circuit_graph {
         /// - `P` is real power,
         /// - `Q` is reactive power, and
         /// - `j` is the imaginary unit.
-        fn find_power_at_node(&mut self, node_index: NodeIndex){
+        fn find_power_at_node(&mut self, node_index: NodeIndex) {
             let Some(node) = self.graph.node_weight(node_index) else {
                 panic!("Tried to access non-existant node: {:?}", node_index);
             };
@@ -456,8 +456,7 @@ pub mod circuit_graph {
         /// available at every node.
         ///
         /// The resulting values are stored on the [`VertexMetadata`] and
-        /// [`EdgeMetadata`] objects, but can be accessed through the
-        /// `current_on_edge()` and `current_at_node()` methods.
+        /// [`EdgeMetadata`] objects.
         pub fn compute_power(&mut self) {
             for edge_index in self.graph.edge_indices() {
                 self.find_power_on_edge(edge_index);
