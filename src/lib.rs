@@ -9,16 +9,89 @@ pub mod circuit_graph {
     use petgraph::prelude::*;
 
     #[derive(PartialEq, Eq)]
-    pub enum VertexType {
-        Source,
-        Sink,
-        Internal,
+    pub enum VertexTag {
+        Source {
+            tag: u32,
+        },
+        Sink {
+            tag: u32,
+        },
+        Internal {
+            tag: u32,
+        },
+        Transformer {
+            primary_tag: u32,
+            primary_coils: u32,
+            secondary_tag: u32,
+            secondary_coils: u32,
+        },
+        TransformerPrimary {
+            tag: u32,
+            secondary_tag: u32,
+            num_coils: u32,
+        },
+        TransformerSecondary {
+            tag: u32,
+            primary_tag: u32,
+            num_coils: u32,
+        },
+    }
+
+    impl VertexTag {
+        /// Returns the tag that this [`VertexTag`] holds, no matter the variant.
+        ///
+        /// # Panics
+        /// This will panic if the [`VertexTag`] is a [`Transformer`][transformer]
+        /// variant.
+        ///
+        /// [transformer]: `VertexTag::Transformer`
+        pub fn get_tag(&self) -> &u32 {
+            match self {
+                Self::Transformer { .. } => {
+                    panic!("Attempted to get tag from Transformer node.");
+                }
+                Self::Source { tag }
+                | Self::Sink { tag }
+                | Self::Internal { tag }
+                | Self::TransformerPrimary {
+                    tag,
+                    secondary_tag: _,
+                    num_coils: _,
+                }
+                | Self::TransformerSecondary {
+                    tag,
+                    primary_tag: _,
+                    num_coils: _,
+                } => tag,
+            }
+        }
+
+        /// Returns whether this [`VertexTag`] is of the [`Internal`][internal]
+        /// variant.
+        ///
+        /// [internal]: `VertexTag::Internal`
+        pub fn is_internal(&self) -> bool {
+            match self {
+                Self::Internal { .. } => true,
+                _ => false,
+            }
+        }
+
+        /// Returns whether this [`VertexTag`] is of the [`Source`][source]
+        /// variant.
+        ///
+        /// [source]: `VertexTag::Source`
+        pub fn is_source(&self) -> bool {
+            match self {
+                Self::Source { .. } => true,
+                _ => false,
+            }
+        }
     }
 
     pub struct VertexMetadata<T> {
         pub voltage: Option<T>,
-        pub tag: u32,
-        pub vertex_type: VertexType,
+        pub vertex_tag: VertexTag,
         pub power: Option<T>,
     }
 
@@ -26,20 +99,26 @@ pub mod circuit_graph {
         /// Construct a new [`VertexMetadata`]. This constructor guarantees that a
         /// source or sink node will have a voltage associated, and that internal nodes
         /// will have [`None`] instead.
-        pub fn new(voltage: Option<T>, tag: u32, vertex_type: VertexType) -> Self {
-            match vertex_type {
-                VertexType::Internal => Self {
+        ///
+        /// # Panics
+        /// This constructor panics if the given `vertex_tag` is either
+        /// `TransformerPrimary` or `TransformerSecondary`; these types are for
+        /// internal use and should not be constructed directly.
+        pub fn new(voltage: Option<T>, vertex_tag: VertexTag) -> Self {
+            match vertex_tag {
+                VertexTag::TransformerPrimary { .. } | VertexTag::TransformerSecondary { .. } => {
+                    panic!("Attempted to create an internal transformer node via new()");
+                }
+                VertexTag::Internal { .. } | VertexTag::Transformer { .. } => Self {
                     voltage: None,
-                    tag,
-                    vertex_type,
+                    vertex_tag,
                     power: None,
                 },
                 _ => {
                     assert!(!voltage.is_none());
                     Self {
                         voltage,
-                        tag,
-                        vertex_type,
+                        vertex_tag,
                         power: None,
                     }
                 }
@@ -47,7 +126,12 @@ pub mod circuit_graph {
         }
     }
 
-    /// A struct to hold the informatino for an edge in the graph.
+    enum EdgeType<T> {
+        Component { admittance: T },
+        Transformer,
+    }
+
+    /// A struct to hold the information for an edge in the graph.
     ///
     /// An edge represents a component in a circuit, which may be purely
     /// resistive, capacitative, or inductive, or some combination of the three.
@@ -63,10 +147,10 @@ pub mod circuit_graph {
     pub struct EdgeMetadata<T> {
         pub tail: u32,
         pub head: u32,
-        pub admittance: T,
         current_id: Option<usize>,
         pub current: Option<T>,
         pub power: Option<T>,
+        edge_type: EdgeType<T>,
     }
 
     impl<T> EdgeMetadata<T> {
@@ -78,17 +162,42 @@ pub mod circuit_graph {
             Self {
                 tail,
                 head,
-                admittance,
                 current_id: None,
                 current: None,
                 power: None,
+                edge_type: EdgeType::Component { admittance },
+            }
+        }
+
+        /// Finds the admittance of an edge.
+        ///
+        /// # Panics
+        /// Will panic if called on a [`Transformer`][transformer] edge.
+        ///
+        /// [transformer]: `EdgeType::Transformer`
+        pub fn get_admittance(&self) -> &T {
+            match &self.edge_type {
+                EdgeType::Component { admittance } => admittance,
+                EdgeType::Transformer => {
+                    panic!("Attempted to get admittance of a transformer node");
+                }
+            }
+        }
+
+        /// Returns whether this edge is a [`Transformer`][transformer] edge.
+        ///
+        /// [transformer]: `EdgeType::Transformer`
+        pub fn is_transformer(&self) -> bool {
+            match self.edge_type {
+                EdgeType::Transformer => true,
+                EdgeType::Component { admittance: _ } => false,
             }
         }
     }
 
     /// A struct representing a passive circuit. It relies on a flow graph where
-    ///  - vertices are annotated with a [`VertexType`],
-    ///  - vertices are annotated with a voltage, and
+    ///  - vertices are annotated with a [`VertexTag`],
+    ///  - vertices are annotated with a voltage (which may be [`None`]), and
     ///  - edges are annotated with a weight equal to the admittance (inverse of
     /// impedance) of the component they represent.
     ///
@@ -101,15 +210,66 @@ pub mod circuit_graph {
     }
 
     impl<T> Circuit<T> {
-        pub fn new(vertices: Vec<VertexMetadata<T>>, edges: Vec<EdgeMetadata<T>>) -> Self {
+        /// Create a new circuit from a collection of vertices and edges.
+        ///
+        /// # Panics
+        /// This constructor will panic if an edge's `tail` or `head` refers to a
+        /// non-existant node.
+        pub fn new(vertices: Vec<VertexMetadata<T>>, mut edges: Vec<EdgeMetadata<T>>) -> Self {
             let mut graph: DiGraph<VertexMetadata<T>, EdgeMetadata<T>> = DiGraph::new();
 
             let mut vertex_indices: HashMap<u32, NodeIndex> = HashMap::new();
 
             for vertex in vertices {
-                let tag = vertex.tag;
-                let node_index = graph.add_node(vertex);
-                vertex_indices.insert(tag, node_index);
+                match vertex.vertex_tag {
+                    VertexTag::Transformer {
+                        primary_tag,
+                        primary_coils,
+                        secondary_tag,
+                        secondary_coils,
+                    } => {
+                        // For a transformer, we construct the inner nodes and add them.
+                        let primary_vertex = VertexMetadata {
+                            voltage: None,
+                            vertex_tag: VertexTag::TransformerPrimary {
+                                tag: primary_tag,
+                                secondary_tag,
+                                num_coils: primary_coils,
+                            },
+                            power: None,
+                        };
+                        let secondary_vertex = VertexMetadata {
+                            voltage: None,
+                            vertex_tag: VertexTag::TransformerSecondary {
+                                tag: secondary_tag,
+                                primary_tag,
+                                num_coils: secondary_coils,
+                            },
+                            power: None,
+                        };
+                        let primary_index = graph.add_node(primary_vertex);
+                        let secondary_index = graph.add_node(secondary_vertex);
+
+                        vertex_indices.insert(primary_tag, primary_index);
+                        vertex_indices.insert(secondary_tag, secondary_index);
+
+                        // Finally we must also add on the edge we need between the nodes.
+                        edges.push(EdgeMetadata {
+                            tail: primary_tag,
+                            head: secondary_tag,
+                            current_id: None,
+                            current: None,
+                            power: None,
+                            edge_type: EdgeType::Transformer,
+                        });
+                    }
+                    _ => {
+                        // Any other type of vertex can simply be added into the graph.
+                        let tag = *vertex.vertex_tag.get_tag();
+                        let node_index = graph.add_node(vertex);
+                        vertex_indices.insert(tag, node_index);
+                    }
+                }
             }
 
             for edge in edges {
@@ -204,7 +364,7 @@ pub mod circuit_graph {
             // and sources have their voltage predetermined.
             self.graph
                 .node_weights()
-                .filter(|v| v.vertex_type == VertexType::Internal)
+                .filter(|v| v.vertex_tag.is_internal())
                 .count()
         }
 
@@ -288,17 +448,32 @@ pub mod circuit_graph {
                 .graph
                 .node_indices()
                 .filter(|index| {
-                    self.graph.node_weight(*index).unwrap().vertex_type == VertexType::Internal
+                    self.graph
+                        .node_weight(*index)
+                        .unwrap()
+                        .vertex_tag
+                        .is_internal()
                         && (self.graph.edges_directed(*index, Incoming).count() != 1
                             || self.graph.edges_directed(*index, Outgoing).count() != 1)
                 })
                 .collect();
             let num_bus_nodes = bus_indices.len();
 
+            // Find all the transformer edges
+            let transformer_edges: Vec<EdgeIndex> = self
+                .graph
+                .edge_indices()
+                .filter(|index| self.graph.edge_weight(*index).unwrap().is_transformer())
+                .collect();
+            let num_transformer_edges = transformer_edges.len();
+
             // The coefficient matrix for the system of equations
-            let mut coeffs: Mat<T> = Mat::zeros(num_paths + num_bus_nodes, num_unknowns);
+            let mut coeffs: Mat<T> = Mat::zeros(
+                num_paths + num_bus_nodes + num_transformer_edges,
+                num_unknowns,
+            );
             // The column vector of RHS values for the system of equations
-            let mut column: Col<T> = Col::zeros(num_paths + num_bus_nodes);
+            let mut column: Col<T> = Col::zeros(num_paths + num_bus_nodes + num_transformer_edges);
 
             // Begin by establishing equations for the voltage drop along every source->sink
             // path. (KVL)
@@ -309,10 +484,15 @@ pub mod circuit_graph {
 
                 for edge_index in &path.1 {
                     let edge = self.graph.edge_weight(*edge_index).unwrap();
-                    let current_index = edge.current_id.unwrap();
-                    // Add on this edge's contribution to what's there, it might be in series
-                    let current_val = coeffs.read(i, current_index);
-                    coeffs.write(i, current_index, edge.admittance.faer_inv() + current_val);
+                    match edge.edge_type {
+                        EdgeType::Component { admittance } => {
+                            let current_index = edge.current_id.unwrap();
+                            // Add on this edge's contribution to what's there, it might be in series
+                            let present_value = coeffs.read(i, current_index);
+                            coeffs.write(i, current_index, admittance.faer_inv() + present_value);
+                        }
+                        EdgeType::Transformer => {}
+                    }
                 }
             }
 
@@ -329,6 +509,50 @@ pub mod circuit_graph {
                     let current_index = edge_ref.weight().current_id.unwrap();
                     coeffs.write(i, current_index, T::faer_one().faer_neg());
                 }
+            }
+
+            // At every transformer, we find the current through it by adding up the current
+            // coming in and multiplying by the ratio of the coil windings.
+            for (i, edge_index) in ((num_paths + num_bus_nodes)
+                ..(num_paths + num_bus_nodes + num_transformer_edges))
+                .zip(transformer_edges)
+            {
+                for edge in self
+                    .graph
+                    .edges_directed(self.graph.edge_endpoints(edge_index).unwrap().0, Incoming)
+                {
+                    coeffs.write(i, edge.weight().current_id.unwrap(), T::faer_one());
+                }
+                let (primary_index, secondary_index) =
+                    self.graph.edge_endpoints(edge_index).unwrap();
+                let primary_coils = match self.graph.node_weight(primary_index).unwrap().vertex_tag
+                {
+                    VertexTag::TransformerPrimary {
+                        tag: _,
+                        secondary_tag: _,
+                        num_coils,
+                    } => num_coils,
+                    _ => panic!("Attempted to get primary coils from wrong vertex"),
+                };
+                let secondary_coils =
+                    match self.graph.node_weight(secondary_index).unwrap().vertex_tag {
+                        VertexTag::TransformerSecondary {
+                            tag: _,
+                            primary_tag: _,
+                            num_coils,
+                        } => num_coils,
+                        _ => panic!("Attempted to get secondary coils from wrong vertex"),
+                    };
+                coeffs.write(
+                    i,
+                    self.graph
+                        .edge_weight(edge_index)
+                        .unwrap()
+                        .current_id
+                        .unwrap(),
+                    T::faer_from_f64(f64::from(primary_coils) / f64::from(secondary_coils))
+                        .faer_neg(),
+                )
             }
 
             // Solve the system of equations
@@ -366,32 +590,75 @@ pub mod circuit_graph {
             for node_index in sorted_nodes {
                 let weight = self.graph.node_weight(node_index).unwrap();
 
-                if weight.vertex_type != VertexType::Internal {
-                    continue;
+                // We only need to calculate voltages for internal and transformer nodes.
+                match weight.vertex_tag {
+                    VertexTag::Internal { tag: _ }
+                    | VertexTag::TransformerPrimary {
+                        tag: _,
+                        secondary_tag: _,
+                        num_coils: _,
+                    } => {
+                        let prior_index = self
+                            .graph
+                            .neighbors_directed(node_index, Incoming)
+                            .next()
+                            .unwrap();
+                        let prior_voltage = self
+                            .graph
+                            .node_weight(prior_index)
+                            .unwrap()
+                            .voltage
+                            .unwrap();
+                        let connection_index =
+                            self.graph.find_edge(prior_index, node_index).unwrap();
+                        let edge_weight = self.graph.edge_weight(connection_index).unwrap();
+
+                        let new_voltage = Some(
+                            prior_voltage
+                                - edge_weight.current.unwrap()
+                                    * edge_weight.get_admittance().faer_inv(),
+                        );
+
+                        let weight = self.graph.node_weight_mut(node_index).unwrap();
+
+                        weight.voltage = new_voltage;
+                    }
+                    // A TransformerSecondary vertex only depends on the primary vertex's voltage
+                    // and the coil ratio.
+                    VertexTag::TransformerSecondary {
+                        tag: _,
+                        primary_tag,
+                        num_coils: secondary_coils,
+                    } => {
+                        let primary_weight = self
+                            .graph
+                            .node_weights()
+                            .find(|weight| *weight.vertex_tag.get_tag() == primary_tag)
+                            .unwrap();
+
+                        // Ensure we got a TransformerPrimary, if not we can't find the number of
+                        // coils.
+                        match primary_weight.vertex_tag {
+                            VertexTag::TransformerPrimary {
+                                tag: _,
+                                secondary_tag: _,
+                                num_coils: primary_coils,
+                            } => {
+                                let voltage =
+                                    primary_weight.voltage.unwrap().faer_mul(T::faer_from_f64(
+                                        f64::from(secondary_coils) / f64::from(primary_coils),
+                                    ));
+
+                                let weight = self.graph.node_weight_mut(node_index).unwrap();
+                                weight.voltage = Some(voltage);
+                            }
+                            _ => {
+                                panic!("Attempted to find primary transformer vertex, but the VertexType was wrong. Tag: {:?}", primary_tag)
+                            }
+                        }
+                    }
+                    _ => {}
                 }
-
-                let prior_index = self
-                    .graph
-                    .neighbors_directed(node_index, Incoming)
-                    .next()
-                    .unwrap();
-                let prior_voltage = self
-                    .graph
-                    .node_weight(prior_index)
-                    .unwrap()
-                    .voltage
-                    .unwrap();
-                let connection_index = self.graph.find_edge(prior_index, node_index).unwrap();
-                let edge_weight = self.graph.edge_weight(connection_index).unwrap();
-
-                let new_voltage = Some(
-                    prior_voltage
-                        - edge_weight.current.unwrap() * edge_weight.admittance.faer_inv(),
-                );
-
-                let weight = self.graph.node_weight_mut(node_index).unwrap();
-
-                weight.voltage = new_voltage;
             }
         }
 
@@ -414,8 +681,12 @@ pub mod circuit_graph {
             // self was needed as a mutable borrow so we reborrow here
             let edge = self.graph.edge_weight(edge_index).unwrap();
 
-            let power =
-                edge.current.unwrap().faer_mul(edge.current.unwrap()) * edge.admittance.faer_inv();
+            let power = match edge.edge_type {
+                EdgeType::Component { admittance } => {
+                    edge.current.unwrap().faer_mul(edge.current.unwrap()) * admittance.faer_inv()
+                }
+                EdgeType::Transformer => T::faer_zero(),
+            };
 
             let edge = self.graph.edge_weight_mut(edge_index).unwrap();
             edge.power = Some(power);
@@ -478,11 +749,10 @@ mod tests {
 
     #[test]
     fn create_single_vertex() {
-        let v: VertexMetadata<f64> = VertexMetadata::new(Some(1f64), 0, VertexType::Source);
+        let v: VertexMetadata<f64> = VertexMetadata::new(Some(1f64), VertexTag::Source { tag: 0 });
 
         assert!(v.voltage.unwrap() == 1f64);
-        assert!(v.tag == 0);
-        assert!(v.vertex_type == VertexType::Source);
+        assert!(v.vertex_tag == VertexTag::Source { tag: 0 });
     }
 
     #[test]
@@ -491,13 +761,13 @@ mod tests {
 
         assert!(e.tail == 0);
         assert!(e.head == 1);
-        assert!(e.admittance == 0.5);
+        assert!(*e.get_admittance() == 0.5);
     }
 
     #[test]
     fn create_graph() {
-        let v1 = VertexMetadata::new(Some(1.0), 1, VertexType::Source);
-        let v2 = VertexMetadata::new(Some(0.0), 2, VertexType::Sink);
+        let v1 = VertexMetadata::new(Some(1.0), VertexTag::Source { tag: 1 });
+        let v2 = VertexMetadata::new(Some(0.0), VertexTag::Sink { tag: 2 });
 
         let e = EdgeMetadata::new(1, 2, 2.0);
 
@@ -518,8 +788,8 @@ mod tests {
     /// ----------------
     /// ```
     fn create_simple_circuit() -> Circuit<f64> {
-        let source = VertexMetadata::new(Some(3.0), 0, VertexType::Source);
-        let sink = VertexMetadata::new(Some(0.0), 1, VertexType::Sink);
+        let source = VertexMetadata::new(Some(3.0), VertexTag::Source { tag: 0 });
+        let sink = VertexMetadata::new(Some(0.0), VertexTag::Sink { tag: 1 });
 
         let edge = EdgeMetadata::new(0, 1, 0.5);
 
@@ -535,7 +805,7 @@ mod tests {
         let source = circuit
             .graph
             .node_weights()
-            .find(|v| v.vertex_type == VertexType::Source)
+            .find(|v| v.vertex_tag.is_source())
             .unwrap();
         assert!(source.voltage.unwrap() == 3.0);
     }
@@ -601,11 +871,11 @@ mod tests {
     /// ------------------------
     /// ```
     fn create_complex_circuit() -> Circuit<f64> {
-        let source = VertexMetadata::new(Some(2.0), 0, VertexType::Source);
+        let source = VertexMetadata::new(Some(2.0), VertexTag::Source { tag: 0 });
 
-        let v1 = VertexMetadata::new(None, 1, VertexType::Internal);
+        let v1 = VertexMetadata::new(None, VertexTag::Internal { tag: 1 });
 
-        let sink = VertexMetadata::new(Some(0.0), 2, VertexType::Sink);
+        let sink = VertexMetadata::new(Some(0.0), VertexTag::Sink { tag: 2 });
 
         let e1 = EdgeMetadata::new(0, 1, 1.0);
         let e2 = EdgeMetadata::new(1, 2, 1.0);
@@ -622,7 +892,7 @@ mod tests {
         let source = circuit
             .graph
             .node_weights()
-            .find(|v| v.vertex_type == VertexType::Source)
+            .find(|v| v.vertex_tag.is_source())
             .unwrap();
 
         assert_eq!(source.voltage.unwrap(), 2.0);
@@ -674,7 +944,7 @@ mod tests {
         let node = circuit
             .graph
             .node_weights()
-            .find(|node| node.vertex_type == VertexType::Internal)
+            .find(|node| node.vertex_tag.is_internal())
             .unwrap();
 
         assert!(node.voltage.unwrap() - 0.5 < 1e-10);
@@ -696,7 +966,7 @@ mod tests {
         let node_power = circuit
             .graph
             .node_weights()
-            .find(|node| node.vertex_type == VertexType::Internal)
+            .find(|node| node.vertex_tag.is_internal())
             .unwrap()
             .power
             .unwrap();
@@ -721,12 +991,12 @@ mod tests {
     /// ------------------------
     /// ```
     fn create_series_circuit() -> Circuit<f64> {
-        let source = VertexMetadata::new(Some(2.0), 0, VertexType::Source);
+        let source = VertexMetadata::new(Some(2.0), VertexTag::Source { tag: 0 });
 
-        let v1 = VertexMetadata::new(None, 1, VertexType::Internal);
-        let v2 = VertexMetadata::new(None, 2, VertexType::Internal);
+        let v1 = VertexMetadata::new(None, VertexTag::Internal { tag: 1 });
+        let v2 = VertexMetadata::new(None, VertexTag::Internal { tag: 2 });
 
-        let sink = VertexMetadata::new(Some(0.0), 3, VertexType::Sink);
+        let sink = VertexMetadata::new(Some(0.0), VertexTag::Sink { tag: 3 });
 
         let e1 = EdgeMetadata::new(0, 1, 1.0);
         let e2 = EdgeMetadata::new(1, 3, 1.0);
@@ -846,13 +1116,13 @@ mod tests {
     fn create_multiple_source_circuit() -> Circuit<f64> {
         // Note that source0 represents the node at the very top left of the circuit,
         // and thus has the combined voltage of both the circuit's voltage sources.
-        let source0 = VertexMetadata::new(Some(5.0), 0, VertexType::Source);
-        let source1 = VertexMetadata::new(Some(2.0), 1, VertexType::Source);
+        let source0 = VertexMetadata::new(Some(5.0), VertexTag::Source { tag: 0 });
+        let source1 = VertexMetadata::new(Some(2.0), VertexTag::Source { tag: 1 });
 
-        let v0 = VertexMetadata::new(None, 2, VertexType::Internal);
-        let v1 = VertexMetadata::new(None, 3, VertexType::Internal);
+        let v0 = VertexMetadata::new(None, VertexTag::Internal { tag: 2 });
+        let v1 = VertexMetadata::new(None, VertexTag::Internal { tag: 3 });
 
-        let sink = VertexMetadata::new(Some(0.0), 4, VertexType::Sink);
+        let sink = VertexMetadata::new(Some(0.0), VertexTag::Sink { tag: 4 });
 
         let e0 = EdgeMetadata::new(0, 2, 1.0);
         let e1 = EdgeMetadata::new(2, 3, 1.0);
@@ -963,10 +1233,10 @@ mod tests {
     ///       2ohm
     /// ```
     fn create_ac_circuit() -> Circuit<c64> {
-        let source = VertexMetadata::new(Some(c64::new(4.0, 0.0)), 0, VertexType::Source);
-        let v1 = VertexMetadata::new(None, 1, VertexType::Internal);
-        let v2 = VertexMetadata::new(None, 2, VertexType::Internal);
-        let sink = VertexMetadata::new(Some(c64::faer_zero()), 3, VertexType::Sink);
+        let source = VertexMetadata::new(Some(c64::new(4.0, 0.0)), VertexTag::Source { tag: 0 });
+        let v1 = VertexMetadata::new(None, VertexTag::Internal { tag: 1 });
+        let v2 = VertexMetadata::new(None, VertexTag::Internal { tag: 2 });
+        let sink = VertexMetadata::new(Some(c64::faer_zero()), VertexTag::Sink { tag: 3 });
 
         let e1 = EdgeMetadata::new(0, 1, c64::new(0.0, 0.5));
         let e2 = EdgeMetadata::new(1, 2, c64::new(0.0, -1.0));
