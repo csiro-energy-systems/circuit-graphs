@@ -799,7 +799,7 @@ mod tests {
     /// Test that the circuit was set up properly in that the voltage of the
     /// voltage source was set to the correct value.
     #[test]
-    fn check_simple_voltage_source() {
+    fn simple_voltage_source() {
         let circuit = create_simple_circuit();
 
         let source = circuit
@@ -812,7 +812,7 @@ mod tests {
 
     /// Test that the correct number of unknown currents and voltages are being reported.
     #[test]
-    fn test_simple_num_unknowns() {
+    fn simple_num_unknowns() {
         let mut circuit = create_simple_circuit();
 
         assert_eq!(circuit.determine_unknown_currents(), 1);
@@ -821,7 +821,7 @@ mod tests {
 
     /// Test that the correct number of paths are found.
     #[test]
-    fn test_simple_num_paths() {
+    fn simple_num_paths() {
         let circuit = create_simple_circuit();
 
         assert_eq!(circuit.find_paths().len(), 1);
@@ -829,7 +829,7 @@ mod tests {
 
     /// Test that the solved current value through the resistor is correct.
     #[test]
-    fn test_simple_solved_current() {
+    fn simple_solve_currents() {
         let mut circuit = create_simple_circuit();
 
         circuit.solve_currents();
@@ -845,7 +845,7 @@ mod tests {
 
     /// Test that the correct power value is found.
     #[test]
-    fn test_simple_solved_power() {
+    fn simple_solve_power() {
         let mut circuit = create_simple_circuit();
 
         circuit.compute_power();
@@ -886,7 +886,7 @@ mod tests {
 
     /// Test that the circuit's voltage source was set to the correct value.
     #[test]
-    fn check_complex_voltage_source() {
+    fn complex_voltage_source() {
         let circuit = create_complex_circuit();
 
         let source = circuit
@@ -900,7 +900,7 @@ mod tests {
 
     /// Test that the correct number of unknowns are reported.
     #[test]
-    fn test_complex_num_unknowns() {
+    fn complex_num_unknowns() {
         let mut circuit = create_complex_circuit();
 
         assert_eq!(circuit.determine_unknown_currents(), 3);
@@ -909,7 +909,7 @@ mod tests {
 
     /// Test that the correct number of paths are found.
     #[test]
-    fn test_complex_num_paths() {
+    fn complex_num_paths() {
         let circuit = create_complex_circuit();
 
         assert_eq!(circuit.find_paths().len(), 2);
@@ -917,7 +917,7 @@ mod tests {
 
     /// Test that the solved current value through each resistor is correct.
     #[test]
-    fn test_complex_solved_currents() {
+    fn complex_solve_currents() {
         let mut circuit = create_complex_circuit();
 
         circuit.solve_currents();
@@ -935,7 +935,7 @@ mod tests {
 
     /// Test that the solved voltage drop across each resistor is correct.
     #[test]
-    fn test_complex_solved_voltages() {
+    fn complex_solve_voltages() {
         let mut circuit = create_complex_circuit();
 
         circuit.solve_currents();
@@ -953,7 +953,7 @@ mod tests {
     /// Test that the correct power drop along each edge and supply at each node
     /// are found.
     #[test]
-    fn test_complex_solved_power() {
+    fn complex_solve_power() {
         let mut circuit = create_complex_circuit();
 
         circuit.compute_power();
@@ -1008,7 +1008,7 @@ mod tests {
 
     /// Test that the correct number of unknowns are being reported.
     #[test]
-    fn test_series_num_unknowns() {
+    fn series_num_unknowns() {
         let mut circuit = create_series_circuit();
 
         assert_eq!(circuit.determine_unknown_currents(), 3);
@@ -1017,7 +1017,7 @@ mod tests {
 
     /// Test that the correct number of paths are found.
     #[test]
-    fn test_series_num_paths() {
+    fn series_num_paths() {
         let circuit = create_series_circuit();
 
         assert_eq!(circuit.find_paths().len(), 2);
@@ -1025,7 +1025,7 @@ mod tests {
 
     /// Test that the correct current values have been found
     #[test]
-    fn test_series_solved_currents() {
+    fn series_solve_currents() {
         let mut circuit = create_series_circuit();
 
         circuit.solve_currents();
@@ -1045,7 +1045,7 @@ mod tests {
 
     /// Test that the correct voltage values have been found
     #[test]
-    fn test_series_solved_voltages() {
+    fn series_solve_voltages() {
         let mut circuit = create_series_circuit();
 
         circuit.solve_currents();
@@ -1065,7 +1065,7 @@ mod tests {
 
     /// Test that the correct power values have been found.
     #[test]
-    fn test_series_solve_power() {
+    fn series_solve_power() {
         let mut circuit = create_series_circuit();
 
         circuit.compute_power();
@@ -1139,7 +1139,7 @@ mod tests {
 
     /// Test that the correct number of paths are found.
     #[test]
-    fn test_multiple_num_paths() {
+    fn multiple_num_paths() {
         let circuit = create_multiple_source_circuit();
 
         assert_eq!(circuit.find_paths().len(), 6);
@@ -1147,7 +1147,7 @@ mod tests {
 
     /// Test that the correct currents are found.
     #[test]
-    fn test_multiple_solved_currents() {
+    fn multiple_solve_currents() {
         let mut circuit = create_multiple_source_circuit();
 
         circuit.solve_currents();
@@ -1169,7 +1169,7 @@ mod tests {
 
     /// Test that the correct voltages are found.
     #[test]
-    fn test_multiple_solved_voltages() {
+    fn multiple_solve_voltages() {
         let mut circuit = create_multiple_source_circuit();
 
         circuit.solve_currents();
@@ -1190,7 +1190,7 @@ mod tests {
 
     /// Test that the correct power values are found.
     #[test]
-    fn test_multiple_solved_power() {
+    fn multiple_solve_power() {
         let mut circuit = create_multiple_source_circuit();
 
         circuit.compute_power();
@@ -1247,7 +1247,7 @@ mod tests {
 
     /// Test that the correct currents are found.
     #[test]
-    fn test_ac_currents() {
+    fn ac_solve_currents() {
         let mut circuit = create_ac_circuit();
 
         circuit.solve_currents();
@@ -1265,7 +1265,7 @@ mod tests {
 
     /// Test that the correct voltages are found.
     #[test]
-    fn test_ac_voltages() {
+    fn ac_solve_voltages() {
         let mut circuit = create_ac_circuit();
 
         circuit.solve_voltages();
@@ -1284,7 +1284,7 @@ mod tests {
 
     /// Test that the correct power values are found.
     #[test]
-    fn test_ac_power() {
+    fn ac_solve_power() {
         let mut circuit = create_ac_circuit();
 
         circuit.compute_power();
