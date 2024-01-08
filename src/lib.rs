@@ -1309,4 +1309,67 @@ mod tests {
         assert!((node_powers[2] - c64::new(96.0 / 25.0, 128.0 / 25.0)).abs() < 1e-10);
         assert!((node_powers[3] - c64::faer_zero()).abs() < 1e-10);
     }
+
+    /// Create a circuit with a transformer inside.
+    ///
+    /// ```raw
+    ///     _____
+    /// ----__R__---- ------|C(-----
+    /// |   2ohm    | |   -j2ohm   |
+    /// |+          $ $            $
+    /// V 6       20$T$30     j3ohmI
+    /// |-          $ $            $
+    /// |   _____   | |            |
+    /// ----__R__---- --------------
+    ///     1ohm
+    /// ```
+    fn create_transformer_circuit() -> Circuit<c64> {
+        let source = VertexMetadata::new(Some(c64::new(6.0, 0.0)), VertexTag::Source { tag: 0 });
+
+        let transformer = VertexMetadata::new(
+            None,
+            VertexTag::Transformer {
+                primary_tag: 1,
+                primary_coils: 20,
+                secondary_tag: 2,
+                secondary_coils: 30,
+            },
+        );
+
+        let internal = VertexMetadata::new(None, VertexTag::Internal { tag: 3 });
+
+        let primary_sink = VertexMetadata::new(Some(c64::faer_zero()), VertexTag::Sink { tag: 4 });
+        let secondary_sink =
+            VertexMetadata::new(Some(c64::faer_zero()), VertexTag::Sink { tag: 5 });
+
+        let e0 = EdgeMetadata::new(0, 1, c64::new(0.5, 0.0));
+        let e1 = EdgeMetadata::new(1, 4, c64::new(1.0, 0.0));
+        let e2 = EdgeMetadata::new(2, 3, c64::new(0.0, 0.5));
+        let e3 = EdgeMetadata::new(3, 5, c64::new(0.0, -1.0 / 3.0));
+
+        Circuit::new(
+            vec![source, transformer, internal, primary_sink, secondary_sink],
+            vec![e0, e1, e2, e3],
+        )
+    }
+
+    /// Test that the correct currents are found.
+    #[test]
+    fn transformer_solve_currents() {
+        let mut circuit = create_transformer_circuit();
+
+        circuit.solve_currents();
+
+        let solved_currents: Vec<c64> = circuit
+            .graph
+            .edge_weights()
+            .map(|weight| weight.current.unwrap())
+            .collect();
+
+        assert!((solved_currents[0] - c64::new(243.0 / 85.0, -54.0 / 85.0)).abs() < 1e-10);
+        assert!((solved_currents[1] - c64::new(243.0 / 85.0, -54.0 / 85.0)).abs() < 1e-10);
+        assert!((solved_currents[2] - c64::new(162.0 / 85.0, -36.0 / 85.0)).abs() < 1e-10);
+        assert!((solved_currents[3] - c64::new(162.0 / 85.0, -36.0 / 85.0)).abs() < 1e-10);
+        assert!((solved_currents[4] - c64::new(162.0 / 85.0, -36.0 / 85.0)).abs() < 1e-10);
+    }
 }
