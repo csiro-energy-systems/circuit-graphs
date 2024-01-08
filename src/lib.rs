@@ -291,12 +291,12 @@ pub mod circuit_graph {
             // can be uniquely associated with vertices having deg_in = deg_out = 1)
             // need to be uncounted since any group all share the same current. Such nodes
             // are found here:
-            let series_nodes: Vec<NodeIndex> = self
-                .graph
-                .node_indices()
+            let sorted_nodes = algo::toposort(&self.graph, None).unwrap();
+            let series_nodes: Vec<&NodeIndex> = sorted_nodes
+                .iter()
                 .filter(|index| {
-                    self.graph.edges_directed(*index, Incoming).count() == 1
-                        && self.graph.edges_directed(*index, Outgoing).count() == 1
+                    self.graph.edges_directed(**index, Incoming).count() == 1
+                        && self.graph.edges_directed(**index, Outgoing).count() == 1
                 })
                 .collect();
 
@@ -308,41 +308,79 @@ pub mod circuit_graph {
                 // all the unwrap calls in this for block are safe.
                 let incoming_edge_index = self
                     .graph
-                    .edges_directed(*node_index, Incoming)
+                    .edges_directed(**node_index, Incoming)
                     .last()
                     .unwrap()
                     .id();
                 let outgoing_edge_index = self
                     .graph
-                    .edges_directed(*node_index, Outgoing)
+                    .edges_directed(**node_index, Outgoing)
                     .last()
                     .unwrap()
                     .id();
 
-                if let Some(id) = self
-                    .graph
-                    .edge_weight(incoming_edge_index)
-                    .unwrap()
-                    .current_id
-                {
-                    let outgoing_weight = self.graph.edge_weight_mut(outgoing_edge_index).unwrap();
-                    outgoing_weight.current_id = Some(id);
-                } else if let Some(id) = self
+                // We check the outgoing edge to make sure that at a transformer, a series
+                // collection breaks into a new one; the Transformer edge will not have the
+                // same current as its predecessor.
+                match self
                     .graph
                     .edge_weight(outgoing_edge_index)
                     .unwrap()
-                    .current_id
+                    .edge_type
                 {
-                    let incoming_weight = self.graph.edge_weight_mut(incoming_edge_index).unwrap();
-                    incoming_weight.current_id = Some(id);
-                } else {
-                    let incoming_weight = self.graph.edge_weight_mut(incoming_edge_index).unwrap();
-                    incoming_weight.current_id = Some(next_current_index);
+                    EdgeType::Transformer => {
+                        if self
+                            .graph
+                            .edge_weight(incoming_edge_index)
+                            .unwrap()
+                            .current_id
+                            .is_some()
+                        {
+                            let outgoing_weight =
+                                self.graph.edge_weight_mut(outgoing_edge_index).unwrap();
+                            outgoing_weight.current_id = Some(next_current_index);
 
-                    let outgoing_weight = self.graph.edge_weight_mut(outgoing_edge_index).unwrap();
-                    outgoing_weight.current_id = Some(next_current_index);
+                            next_current_index += 1;
+                        // If the incoming edge is not set, then it must be the case that both edges
+                        // are unset, since we are going in topological sort order.
+                        } else {
+                            let incoming_weight =
+                                self.graph.edge_weight_mut(incoming_edge_index).unwrap();
+                            incoming_weight.current_id = Some(next_current_index);
 
-                    next_current_index += 1;
+                            next_current_index += 1;
+
+                            let outgoing_weight =
+                                self.graph.edge_weight_mut(outgoing_edge_index).unwrap();
+                            outgoing_weight.current_id = Some(next_current_index);
+
+                            next_current_index += 1;
+                        }
+                    }
+                    EdgeType::Component { .. } => {
+                        if let Some(id) = self
+                            .graph
+                            .edge_weight(incoming_edge_index)
+                            .unwrap()
+                            .current_id
+                        {
+                            let outgoing_weight =
+                                self.graph.edge_weight_mut(outgoing_edge_index).unwrap();
+                            outgoing_weight.current_id = Some(id);
+                        // It's not possible that just the outgoing edge has its current_id set,
+                        // since we're doing them in topological sort order.
+                        } else {
+                            let incoming_weight =
+                                self.graph.edge_weight_mut(incoming_edge_index).unwrap();
+                            incoming_weight.current_id = Some(next_current_index);
+
+                            let outgoing_weight =
+                                self.graph.edge_weight_mut(outgoing_edge_index).unwrap();
+                            outgoing_weight.current_id = Some(next_current_index);
+
+                            next_current_index += 1;
+                        }
+                    }
                 }
             }
 
@@ -517,11 +555,16 @@ pub mod circuit_graph {
                 ..(num_paths + num_bus_nodes + num_transformer_edges))
                 .zip(transformer_edges)
             {
-                for edge in self
-                    .graph
-                    .edges_directed(self.graph.edge_endpoints(edge_index).unwrap().0, Incoming)
-                {
+                let primary_node_index = self.graph.edge_endpoints(edge_index).unwrap().0;
+                for edge in self.graph.edges_directed(primary_node_index, Incoming) {
                     coeffs.write(i, edge.weight().current_id.unwrap(), T::faer_one());
+                }
+                for edge in self.graph.edges_directed(primary_node_index, Outgoing) {
+                    coeffs.write(
+                        i,
+                        edge.weight().current_id.unwrap(),
+                        T::faer_one().faer_neg(),
+                    );
                 }
                 let (primary_index, secondary_index) =
                     self.graph.edge_endpoints(edge_index).unwrap();
@@ -1319,9 +1362,9 @@ mod tests {
     /// |+          $ $            $
     /// V 6       20$T$30     j3ohmI
     /// |-          $ $            $
-    /// |   _____   | |            |
-    /// ----__R__---- --------------
-    ///     1ohm
+    /// |   _____   | |    _____   |
+    /// ----__R__---- -----__R__----
+    ///     1ohm           2ohm
     /// ```
     fn create_transformer_circuit() -> Circuit<c64> {
         let source = VertexMetadata::new(Some(c64::new(6.0, 0.0)), VertexTag::Source { tag: 0 });
@@ -1336,20 +1379,29 @@ mod tests {
             },
         );
 
-        let internal = VertexMetadata::new(None, VertexTag::Internal { tag: 3 });
+        let internal1 = VertexMetadata::new(None, VertexTag::Internal { tag: 3 });
+        let internal2 = VertexMetadata::new(None, VertexTag::Internal { tag: 4 });
 
-        let primary_sink = VertexMetadata::new(Some(c64::faer_zero()), VertexTag::Sink { tag: 4 });
+        let primary_sink = VertexMetadata::new(Some(c64::faer_zero()), VertexTag::Sink { tag: 5 });
         let secondary_sink =
-            VertexMetadata::new(Some(c64::faer_zero()), VertexTag::Sink { tag: 5 });
+            VertexMetadata::new(Some(c64::faer_zero()), VertexTag::Sink { tag: 6 });
 
         let e0 = EdgeMetadata::new(0, 1, c64::new(0.5, 0.0));
-        let e1 = EdgeMetadata::new(1, 4, c64::new(1.0, 0.0));
+        let e1 = EdgeMetadata::new(1, 5, c64::new(1.0, 0.0));
         let e2 = EdgeMetadata::new(2, 3, c64::new(0.0, 0.5));
-        let e3 = EdgeMetadata::new(3, 5, c64::new(0.0, -1.0 / 3.0));
+        let e3 = EdgeMetadata::new(3, 4, c64::new(0.0, -1.0 / 3.0));
+        let e4 = EdgeMetadata::new(4, 6, c64::new(0.5, 0.0));
 
         Circuit::new(
-            vec![source, transformer, internal, primary_sink, secondary_sink],
-            vec![e0, e1, e2, e3],
+            vec![
+                source,
+                transformer,
+                internal1,
+                internal2,
+                primary_sink,
+                secondary_sink,
+            ],
+            vec![e0, e1, e2, e3, e4],
         )
     }
 
@@ -1365,6 +1417,8 @@ mod tests {
             .edge_weights()
             .map(|weight| weight.current.unwrap())
             .collect();
+
+        println!("{:#?}", solved_currents);
 
         assert!((solved_currents[0] - c64::new(243.0 / 85.0, -54.0 / 85.0)).abs() < 1e-10);
         assert!((solved_currents[1] - c64::new(243.0 / 85.0, -54.0 / 85.0)).abs() < 1e-10);
