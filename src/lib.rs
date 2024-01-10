@@ -1482,13 +1482,36 @@ mod tests {
             .map(|weight| weight.current.unwrap())
             .collect();
 
-        println!("{:#?}", solved_currents);
-
         assert!((solved_currents[0] - c64::new(1890.0 / 1241.0, -216.0 / 1241.0)).abs() < 1e-10);
         assert!((solved_currents[1] - c64::new(1890.0 / 1241.0, -216.0 / 1241.0)).abs() < 1e-10);
         assert!((solved_currents[2] - c64::new(1890.0 / 1241.0, -216.0 / 1241.0)).abs() < 1e-10);
         assert!((solved_currents[3] - c64::new(1260.0 / 1241.0, -144.0 / 1241.0)).abs() < 1e-10);
         assert!((solved_currents[4] - c64::new(1260.0 / 1241.0, -144.0 / 1241.0)).abs() < 1e-10);
         assert!((solved_currents[5] - c64::new(1260.0 / 1241.0, -144.0 / 1241.0)).abs() < 1e-10);
+    }
+
+    /// Test that the correct voltages are found.
+    #[test]
+    fn transformer_solve_voltages() {
+        let mut circuit = create_transformer_circuit();
+
+        circuit.solve_currents_and_voltages();
+
+        let solved_voltages: Vec<c64> = circuit
+            .graph
+            .node_weights()
+            .map(|weight| weight.voltage.unwrap())
+            .collect();
+
+        println!("{:#?}", solved_voltages);
+
+        assert!((solved_voltages[0] - c64::new(6.0, 0.0)).abs() < 1e-10);
+        assert!((solved_voltages[1] - c64::new(2664.0 / 1241.0, 972.0 / 1241.0)).abs() < 1e-10);
+        assert!((solved_voltages[2] - c64::new(3666.0 / 1241.0, 432.0 / 1241.0)).abs() < 1e-10);
+        assert!((solved_voltages[3] - c64::new(1890.0 / 1241.0, -216.0 / 1241.0)).abs() < 1e-10);
+        assert!((solved_voltages[4] - c64::new(2952.0 / 1241.0, 3492.0 / 1241.0)).abs() < 1e-10);
+        assert!((solved_voltages[5] - c64::new(2520.0 / 1241.0, -288.0 / 1241.0)).abs() < 1e-10);
+        assert!((solved_voltages[6] - c64::faer_zero()).abs() < 1e-10);
+        assert!((solved_voltages[7] - c64::faer_zero()).abs() < 1e-10);
     }
 }
