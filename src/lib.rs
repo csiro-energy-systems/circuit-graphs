@@ -341,21 +341,8 @@ pub mod circuit_graph {
         /// It also finds paths from the secondary side of transformers to sinks; these
         /// would otherwise not be found.
         pub fn find_paths(&self) -> Vec<(NodeIndex, Vec<EdgeIndex>)> {
-            let mut source_indices: Vec<NodeIndex> = self.graph.externals(Incoming).collect();
+            let source_indices: Vec<NodeIndex> = self.graph.externals(Incoming).collect();
             let sink_indices: Vec<NodeIndex> = self.graph.externals(Outgoing).collect();
-            let mut secondary_indices: Vec<NodeIndex> = self
-                .graph
-                .node_indices()
-                .filter(|index| {
-                    self.graph
-                        .node_weight(*index)
-                        .unwrap()
-                        .vertex_tag
-                        .is_transformer_secondary()
-                })
-                .collect();
-
-            source_indices.append(&mut secondary_indices);
 
             let mut paths: Vec<(NodeIndex, Vec<EdgeIndex>)> = Vec::new();
 
@@ -440,6 +427,32 @@ pub mod circuit_graph {
                 .collect();
             let num_source_sink_nodes = source_sink_nodes.len();
 
+            let internal_nodes: Vec<NodeIndex> = self
+                .graph
+                .node_indices()
+                .filter(|index| {
+                    self.graph
+                        .node_weight(*index)
+                        .unwrap()
+                        .vertex_tag
+                        .is_internal()
+                })
+                .collect();
+            let num_internal_nodes = internal_nodes.len();
+
+            let transformer_nodes: Vec<NodeIndex> = self
+                .graph
+                .node_indices()
+                .filter(|index| {
+                    self.graph
+                        .node_weight(*index)
+                        .unwrap()
+                        .vertex_tag
+                        .is_transformer_secondary()
+                })
+                .collect();
+            let num_transformer_nodes = transformer_nodes.len();
+
             let paths = self.find_paths();
             let num_paths = paths.len();
 
@@ -469,12 +482,22 @@ pub mod circuit_graph {
 
             // The coefficient matrix for the system of equations
             let mut coeffs: Mat<T> = Mat::zeros(
-                num_paths + num_bus_nodes + num_transformer_edges + num_source_sink_nodes,
+                num_paths
+                    + num_bus_nodes
+                    + num_transformer_edges
+                    + num_transformer_nodes
+                    + num_internal_nodes
+                    + num_source_sink_nodes,
                 num_unknown_currents + num_nodes,
             );
             // The column vector of RHS values for the system of equations
             let mut column: Col<T> = Col::zeros(
-                num_paths + num_bus_nodes + num_transformer_edges + num_source_sink_nodes,
+                num_paths
+                    + num_bus_nodes
+                    + num_transformer_edges
+                    + num_transformer_nodes
+                    + num_internal_nodes
+                    + num_source_sink_nodes,
             );
 
             // Begin by establishing equations for the voltage drop along every source->sink
@@ -544,8 +567,12 @@ pub mod circuit_graph {
                 .zip(transformer_edges)
             {
                 let (tail_index, head_index) = self.graph.edge_endpoints(edge_index).unwrap();
-                coeffs.write(i, tail_index.index(), T::faer_one());
-                coeffs.write(i, head_index.index(), T::faer_one());
+                coeffs.write(i, num_unknown_currents + tail_index.index(), T::faer_one());
+                coeffs.write(
+                    i,
+                    num_unknown_currents + head_index.index(),
+                    T::faer_one().faer_neg(),
+                );
 
                 let edge_weight = self.graph.edge_weight(edge_index).unwrap();
                 match edge_weight.edge_type {
@@ -563,8 +590,10 @@ pub mod circuit_graph {
                             .unwrap();
                         coeffs.write(
                             i,
-                            secondary_index.index(),
-                            T::faer_from_f64(f64::from(primary_coils) / f64::from(secondary_coils)),
+                            num_unknown_currents + secondary_index.index(),
+                            T::faer_from_f64(
+                                f64::from(primary_coils) / f64::from(secondary_coils).faer_neg(),
+                            ),
                         );
                     }
                     _ => {
@@ -576,15 +605,129 @@ pub mod circuit_graph {
                 }
             }
 
-            // Finally add in every source and sink, since we know those voltages
             for (i, node_index) in ((num_paths + num_bus_nodes + num_transformer_edges)
-                ..(num_paths + num_bus_nodes + num_transformer_edges + num_source_sink_nodes))
+                ..(num_paths + num_bus_nodes + num_transformer_edges + num_transformer_nodes))
+                .zip(transformer_nodes)
+            {
+                for edge in self.graph.edges_directed(node_index, Outgoing) {
+                    coeffs.write(i, edge.weight().current_id.unwrap(), T::faer_one());
+                }
+
+                let node_tag = self
+                    .graph
+                    .node_weight(node_index)
+                    .unwrap()
+                    .vertex_tag
+                    .get_tag();
+
+                let transformer_edge = self
+                    .graph
+                    .edge_weights()
+                    .find(|weight| match weight.edge_type {
+                        EdgeType::Transformer {
+                            tag,
+                            primary_coils: _,
+                            secondary_coils: _,
+                        } => tag == *node_tag,
+                        _ => false,
+                    })
+                    .unwrap();
+
+                let ratio = match transformer_edge.edge_type {
+                    EdgeType::Transformer {
+                        tag: _,
+                        primary_coils,
+                        secondary_coils,
+                    } => T::faer_from_f64(f64::from(primary_coils) / f64::from(secondary_coils)),
+                    _ => {
+                        panic!("Expected transformer edge");
+                    }
+                };
+                coeffs.write(i, transformer_edge.current_id.unwrap(), ratio.faer_neg());
+            }
+
+            // We need to provide information for the internal vertices' voltage
+            // This is done by taking a prior vertex's voltage and taking off the
+            // voltage drop over the edge that joins them.
+            for (i, node_index) in
+                ((num_paths + num_bus_nodes + num_transformer_edges + num_transformer_nodes)
+                    ..(num_paths
+                        + num_bus_nodes
+                        + num_transformer_edges
+                        + num_transformer_nodes
+                        + num_internal_nodes))
+                    .zip(internal_nodes)
+            {
+                let prior_index = self
+                    .graph
+                    .neighbors_directed(node_index, Incoming)
+                    .take(1)
+                    .last()
+                    .unwrap();
+
+                let edge = self
+                    .graph
+                    .edges_connecting(prior_index, node_index)
+                    .take(1)
+                    .last()
+                    .unwrap()
+                    .weight();
+
+                match edge.edge_type {
+                    EdgeType::Component { admittance } => {
+                        coeffs.write(
+                            i,
+                            edge.current_id.unwrap(),
+                            admittance.faer_inv().faer_neg(),
+                        );
+                    }
+                    EdgeType::Transformer {
+                        tag,
+                        primary_coils,
+                        secondary_coils,
+                    } => {
+                        coeffs.write(
+                            i,
+                            num_unknown_currents + (tag as usize),
+                            T::faer_from_f64(f64::from(primary_coils) / f64::from(secondary_coils))
+                                .faer_neg(),
+                        );
+                    }
+                }
+
+                coeffs.write(i, num_unknown_currents + prior_index.index(), T::faer_one());
+                coeffs.write(
+                    i,
+                    num_unknown_currents + node_index.index(),
+                    T::faer_one().faer_neg(),
+                );
+            }
+
+            // Finally add in every source and sink, since we know those voltages
+            for (i, node_index) in ((num_paths
+                + num_bus_nodes
+                + num_transformer_edges
+                + num_transformer_nodes
+                + num_internal_nodes)
+                ..(num_paths
+                    + num_bus_nodes
+                    + num_transformer_edges
+                    + num_transformer_nodes
+                    + num_internal_nodes
+                    + num_source_sink_nodes))
                 .zip(source_sink_nodes)
             {
                 let voltage = self.graph.node_weight(node_index).unwrap().voltage.unwrap();
-                coeffs.write(i, node_index.index(), T::faer_one());
+                coeffs.write(i, num_unknown_currents + node_index.index(), T::faer_one());
                 column.write(i, voltage);
             }
+
+            println!("coeff matrix:\n{:#?}", coeffs);
+            let mut column_vec = vec![];
+            for i in 0..column.nrows() {
+                column_vec.push(column.read(i));
+            }
+            println!("rhs column:\n{:?}", column_vec);
 
             // Solve the system of equations
             let solver = Svd::new(coeffs.as_ref());
@@ -600,96 +743,6 @@ pub mod circuit_graph {
                 node_weight.voltage = Some(column.read(num_unknown_currents + i));
             }
         }
-
-        /// Solve for the voltages at every node in the circuit. Uses the currents
-        /// assigned to each [`EdgeMetadata`] by `solve_currents`.
-        ///
-        /// Returns nothing as the voltages are set on each node's [`VertexMetadata`].
-        // pub fn solve_voltages(&mut self) {
-        //     // First ensure that the currents have in fact been found. If they aren't,
-        //     // it's not possible to find the voltages.
-        //     if self
-        //         .graph
-        //         .edge_weights()
-        //         .map(|weight| weight.current)
-        //         .any(|current| current.is_none())
-        //     {
-        //         self.solve_currents()
-        //     }
-
-        //     // We ignore the possible error here since for it to occur, there would
-        //     // need to be a cycle in the graph, which would have mucked up finding
-        //     // the currents in the first place, and shouldn't occur anyway.
-        //     let sorted_nodes = algo::toposort(&self.graph, None).unwrap();
-
-        //     for node_index in sorted_nodes {
-        //         let weight = self.graph.node_weight(node_index).unwrap();
-
-        //         // We only need to calculate voltages for internal and transformer nodes.
-        //         match weight.vertex_tag {
-        //             VertexTag::Internal { .. } => {
-        //                 let prior_index = self
-        //                     .graph
-        //                     .neighbors_directed(node_index, Incoming)
-        //                     .next()
-        //                     .unwrap();
-        //                 let prior_voltage = self
-        //                     .graph
-        //                     .node_weight(prior_index)
-        //                     .unwrap()
-        //                     .voltage
-        //                     .unwrap();
-        //                 let connection_index =
-        //                     self.graph.find_edge(prior_index, node_index).unwrap();
-        //                 let edge_weight = self.graph.edge_weight(connection_index).unwrap();
-
-        //                 let new_voltage = Some(
-        //                     prior_voltage
-        //                         - edge_weight.current.unwrap()
-        //                             * edge_weight.get_admittance().faer_inv(),
-        //                 );
-
-        //                 let weight = self.graph.node_weight_mut(node_index).unwrap();
-
-        //                 weight.voltage = new_voltage;
-        //             }
-        //             // A TransformerSecondary vertex only depends on the primary vertex's voltage
-        //             // and the coil ratio.
-        //             VertexTag::TransformerSecondary {
-        //                 tag: _,
-        //                 num_coils: secondary_coils,
-        //             } => {
-        //                 let primary_weight = self
-        //                     .graph
-        //                     .node_weights()
-        //                     .find(|weight| *weight.vertex_tag.get_tag() == primary_tag)
-        //                     .unwrap();
-
-        //                 // Ensure we got a TransformerPrimary, if not we can't find the number of
-        //                 // coils.
-        //                 match primary_weight.vertex_tag {
-        //                     VertexTag::TransformerPrimary {
-        //                         tag: _,
-        //                         secondary_tag: _,
-        //                         num_coils: primary_coils,
-        //                     } => {
-        //                         let voltage =
-        //                             primary_weight.voltage.unwrap().faer_mul(T::faer_from_f64(
-        //                                 f64::from(secondary_coils) / f64::from(primary_coils),
-        //                             ));
-
-        //                         let weight = self.graph.node_weight_mut(node_index).unwrap();
-        //                         weight.voltage = Some(voltage);
-        //                     }
-        //                     _ => {
-        //                         panic!("Attempted to find primary transformer vertex, but the VertexType was wrong. Tag: {:?}", primary_tag)
-        //                     }
-        //                 }
-        //             }
-        //             _ => {}
-        //         }
-        //     }
-        // }
 
         /// Find the power consumed by an edge.
         ///
@@ -1431,11 +1484,11 @@ mod tests {
 
         println!("{:#?}", solved_currents);
 
-        assert!((solved_currents[0] - c64::new(156.0 / 173.0, -24.0 / 173.0)).abs() < 1e-10);
-        assert!((solved_currents[1] - c64::new(156.0 / 173.0, -24.0 / 173.0)).abs() < 1e-10);
-        assert!((solved_currents[2] - c64::new(234.0 / 173.0, -36.0 / 173.0)).abs() < 1e-10);
-        assert!((solved_currents[3] - c64::new(234.0 / 173.0, -36.0 / 173.0)).abs() < 1e-10);
-        assert!((solved_currents[4] - c64::new(234.0 / 173.0, -36.0 / 173.0)).abs() < 1e-10);
-        assert!((solved_currents[5] - c64::new(234.0 / 173.0, -36.0 / 173.0)).abs() < 1e-10);
+        assert!((solved_currents[0] - c64::new(1890.0 / 1241.0, -216.0 / 1241.0)).abs() < 1e-10);
+        assert!((solved_currents[1] - c64::new(1890.0 / 1241.0, -216.0 / 1241.0)).abs() < 1e-10);
+        assert!((solved_currents[2] - c64::new(1890.0 / 1241.0, -216.0 / 1241.0)).abs() < 1e-10);
+        assert!((solved_currents[3] - c64::new(1260.0 / 1241.0, -144.0 / 1241.0)).abs() < 1e-10);
+        assert!((solved_currents[4] - c64::new(1260.0 / 1241.0, -144.0 / 1241.0)).abs() < 1e-10);
+        assert!((solved_currents[5] - c64::new(1260.0 / 1241.0, -144.0 / 1241.0)).abs() < 1e-10);
     }
 }
