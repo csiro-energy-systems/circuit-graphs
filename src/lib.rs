@@ -722,12 +722,12 @@ pub mod circuit_graph {
                 column.write(i, voltage);
             }
 
-            println!("coeff matrix:\n{:#?}", coeffs);
-            let mut column_vec = vec![];
-            for i in 0..column.nrows() {
-                column_vec.push(column.read(i));
-            }
-            println!("rhs column:\n{:?}", column_vec);
+            // println!("coeff matrix:\n{:#?}", coeffs);
+            // let mut column_vec = vec![];
+            // for i in 0..column.nrows() {
+            //     column_vec.push(column.read(i));
+            // }
+            // println!("rhs column:\n{:?}", column_vec);
 
             // Solve the system of equations
             let solver = Svd::new(coeffs.as_ref());
@@ -1503,8 +1503,6 @@ mod tests {
             .map(|weight| weight.voltage.unwrap())
             .collect();
 
-        println!("{:#?}", solved_voltages);
-
         assert!((solved_voltages[0] - c64::new(6.0, 0.0)).abs() < 1e-10);
         assert!((solved_voltages[1] - c64::new(2664.0 / 1241.0, 972.0 / 1241.0)).abs() < 1e-10);
         assert!((solved_voltages[2] - c64::new(3666.0 / 1241.0, 432.0 / 1241.0)).abs() < 1e-10);
@@ -1513,5 +1511,43 @@ mod tests {
         assert!((solved_voltages[5] - c64::new(2520.0 / 1241.0, -288.0 / 1241.0)).abs() < 1e-10);
         assert!((solved_voltages[6] - c64::faer_zero()).abs() < 1e-10);
         assert!((solved_voltages[7] - c64::faer_zero()).abs() < 1e-10);
+    }
+
+    /// Test that the correct power values are found.
+    #[test]
+    fn transformer_solve_power() {
+        let mut circuit = create_transformer_circuit();
+
+        circuit.compute_power();
+
+        let solved_power: Vec<c64> = circuit
+            .graph
+            .edge_weights()
+            .map(|weight| weight.power.unwrap())
+            .collect();
+
+        assert!(
+            (solved_power[0] - c64::new(7050888.0 / 1540081.0, -1632960.0 / 1540081.0)).abs()
+                < 1e-10
+        );
+        assert!(
+            (solved_power[1] - c64::new(3496608.0 / 1540081.0, 841104.0 / 1540081.0)).abs() < 1e-10
+        );
+        assert!(
+            (solved_power[2] - c64::new(3525444.0 / 1540081.0, -816480.0 / 1540081.0)).abs()
+                < 1e-10
+        );
+        assert!(
+            (solved_power[3] - c64::new(-725760.0 / 1540081.0, -3133728.0 / 1540081.0)).abs()
+                < 1e-10
+        );
+        assert!(
+            (solved_power[4] - c64::new(1088640.0 / 1540081.0, 4700592.0 / 1540081.0)).abs()
+                < 1e-10
+        );
+        assert!(
+            (solved_power[5] - c64::new(3133728.0 / 1540081.0, -725760.0 / 1540081.0)).abs()
+                < 1e-10
+        );
     }
 }
