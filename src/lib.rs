@@ -411,17 +411,18 @@ pub mod circuit_graph {
             let num_unknown_currents = self.determine_unknown_currents();
             let num_nodes = self.graph.node_count();
 
-            // We need all the either source or sink nodes
+            // Find all the either source or sink nodes
             let source_sink_nodes: Vec<NodeIndex> = self
                 .graph
                 .node_indices()
                 .filter(|index| {
-                    let tag = &self.graph.node_weight(*index).unwrap().vertex_type;
-                    tag.is_source() || tag.is_sink()
+                    let vertex_type = &self.graph.node_weight(*index).unwrap().vertex_type;
+                    vertex_type.is_source() || vertex_type.is_sink()
                 })
                 .collect();
             let num_source_sink_nodes = source_sink_nodes.len();
 
+            // Find all internal nodes
             let internal_nodes: Vec<NodeIndex> = self
                 .graph
                 .node_indices()
@@ -434,22 +435,6 @@ pub mod circuit_graph {
                 })
                 .collect();
             let num_internal_nodes = internal_nodes.len();
-
-            let transformer_nodes: Vec<NodeIndex> = self
-                .graph
-                .node_indices()
-                .filter(|index| {
-                    self.graph
-                        .node_weight(*index)
-                        .unwrap()
-                        .vertex_type
-                        .is_transformer_secondary()
-                })
-                .collect();
-            let num_transformer_nodes = transformer_nodes.len();
-
-            let paths = self.find_paths();
-            let num_paths = paths.len();
 
             // Now find internal vertices which bus multiple branches
             let bus_indices: Vec<NodeIndex> = self
@@ -467,6 +452,20 @@ pub mod circuit_graph {
                 .collect();
             let num_bus_nodes = bus_indices.len();
 
+            // Find all TransformerSecondary nodes
+            let transformer_nodes: Vec<NodeIndex> = self
+                .graph
+                .node_indices()
+                .filter(|index| {
+                    self.graph
+                        .node_weight(*index)
+                        .unwrap()
+                        .vertex_type
+                        .is_transformer_secondary()
+                })
+                .collect();
+            let num_transformer_nodes = transformer_nodes.len();
+
             // Find all the transformer edges
             let transformer_edges: Vec<EdgeIndex> = self
                 .graph
@@ -474,6 +473,10 @@ pub mod circuit_graph {
                 .filter(|index| self.graph.edge_weight(*index).unwrap().is_transformer())
                 .collect();
             let num_transformer_edges = transformer_edges.len();
+
+            // Find all source->sink or transformer->sink paths in the circuit.
+            let paths = self.find_paths();
+            let num_paths = paths.len();
 
             // The coefficient matrix for the system of equations
             let mut coeffs: Mat<T> = Mat::zeros(
@@ -505,6 +508,9 @@ pub mod circuit_graph {
                     T::faer_one().faer_neg(),
                 );
 
+                // A passive component will contribute its impedance times its current to the
+                // equation.
+                // A transformer will contribute its secondary voltage times its winding ratio.
                 for edge_index in &path.1 {
                     let edge = self.graph.edge_weight(*edge_index).unwrap();
                     match edge.edge_type {
@@ -556,11 +562,14 @@ pub mod circuit_graph {
             }
 
             // At every transformer, we relate the primary and secondary voltages by the
-            // coil ratio.
+            // coil ratio, i.e. the voltage drop along the transformer edge is equal to
+            // the voltage at the corresponding node times the winding ratio.
+            // (Conservation of power, part 1)
             for (i, edge_index) in ((num_paths + num_bus_nodes)
                 ..(num_paths + num_bus_nodes + num_transformer_edges))
                 .zip(transformer_edges)
             {
+                // Take the difference between the voltages at either end of the edge
                 let (tail_index, head_index) = self.graph.edge_endpoints(edge_index).unwrap();
                 coeffs.write(i, num_unknown_currents + tail_index.index(), T::faer_one());
                 coeffs.write(
@@ -569,6 +578,7 @@ pub mod circuit_graph {
                     T::faer_one().faer_neg(),
                 );
 
+                // We set that difference equal to the node's voltage times the winding ratio.
                 let edge_weight = self.graph.edge_weight(edge_index).unwrap();
                 match edge_weight.edge_type {
                     EdgeType::Transformer {
@@ -600,14 +610,20 @@ pub mod circuit_graph {
                 }
             }
 
+            // At every transformer node, we enforce that the current leaving the node must
+            // be equal to the current through the corresponding edge times the winding
+            // ratio.
+            // (Conservation of power, part 2)
             for (i, node_index) in ((num_paths + num_bus_nodes + num_transformer_edges)
                 ..(num_paths + num_bus_nodes + num_transformer_edges + num_transformer_nodes))
                 .zip(transformer_nodes)
             {
+                // Take every current leaving the node.
                 for edge in self.graph.edges_directed(node_index, Outgoing) {
                     coeffs.write(i, edge.weight().current_id.unwrap(), T::faer_one());
                 }
 
+                // Find the edge and take its current times the winding ratio.
                 let node_tag = self
                     .graph
                     .node_weight(node_index)
@@ -641,8 +657,8 @@ pub mod circuit_graph {
             }
 
             // We need to provide information for the internal vertices' voltage
-            // This is done by taking a prior vertex's voltage and taking off the
-            // voltage drop over the edge that joins them.
+            // This is done by taking a prior vertex's voltage and taking off the voltage
+            // drop over the edge that joins them.
             for (i, node_index) in
                 ((num_paths + num_bus_nodes + num_transformer_edges + num_transformer_nodes)
                     ..(num_paths
@@ -659,6 +675,14 @@ pub mod circuit_graph {
                     .last()
                     .unwrap();
 
+                // Take the difference between this node's voltage and the prior one's
+                coeffs.write(i, num_unknown_currents + prior_index.index(), T::faer_one());
+                coeffs.write(
+                    i,
+                    num_unknown_currents + node_index.index(),
+                    T::faer_one().faer_neg(),
+                );
+
                 let edge = self
                     .graph
                     .edges_connecting(prior_index, node_index)
@@ -667,6 +691,9 @@ pub mod circuit_graph {
                     .unwrap()
                     .weight();
 
+                // As before, a passive component's voltage drop is its impedance times the
+                // current, and a transforer's is the voltage at the secondary node times the
+                // winding ratio.
                 match edge.edge_type {
                     EdgeType::PassiveComponent { admittance } => {
                         coeffs.write(
@@ -688,16 +715,10 @@ pub mod circuit_graph {
                         );
                     }
                 }
-
-                coeffs.write(i, num_unknown_currents + prior_index.index(), T::faer_one());
-                coeffs.write(
-                    i,
-                    num_unknown_currents + node_index.index(),
-                    T::faer_one().faer_neg(),
-                );
             }
 
-            // Finally add in every source and sink, since we know those voltages
+            // Finally add in an equation for every source and sink identifying their
+            // voltages; these are already known.
             for (i, node_index) in ((num_paths
                 + num_bus_nodes
                 + num_transformer_edges
@@ -716,31 +737,26 @@ pub mod circuit_graph {
                 column.write(i, voltage);
             }
 
-            // println!("coeff matrix:\n{:#?}", coeffs);
-            // let mut column_vec = vec![];
-            // for i in 0..column.nrows() {
-            //     column_vec.push(column.read(i));
-            // }
-            // println!("rhs column:\n{:?}", column_vec);
-
             // Solve the system of equations
             let solver = Svd::new(coeffs.as_ref());
             solver.solve_in_place(column.as_mut().as_2d_mut());
             column.resize_with(num_unknown_currents + num_nodes, |_| T::faer_zero());
 
+            // Assign every edge its current
             for edge_weight in self.graph.edge_weights_mut() {
                 let current_id = edge_weight.current_id.unwrap();
                 edge_weight.current = Some(column.read(current_id));
             }
 
+            // Assign every node its voltage.
             for (i, node_weight) in self.graph.node_weights_mut().enumerate() {
                 node_weight.voltage = Some(column.read(num_unknown_currents + i));
             }
         }
 
-        /// Find the power consumed by an edge.
+        /// Find the power consumed by an edge and store it on the [`EdgeMetadata`]
         ///
-        /// For complex-valued systems, the returned value will be in the form
+        /// For complex-valued systems, the value will be in the form
         /// `P + jQ` where
         /// - `P` is real power,
         /// - `Q` is reactive power, and
@@ -807,6 +823,12 @@ pub mod circuit_graph {
 
         /// Eagerly compute the power consumption on every edge, and the power
         /// available at every node.
+        /// 
+        /// For complex-valued systems, the power value will be in the form
+        /// `P + jQ` where
+        /// - `P` is real power,
+        /// - `Q` is reactive power, and
+        /// - `j` is the imaginary unit.
         ///
         /// The resulting values are stored on the [`VertexMetadata`] and
         /// [`EdgeMetadata`] objects.
