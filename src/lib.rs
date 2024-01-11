@@ -13,7 +13,7 @@ pub mod circuit_graph {
         Source { tag: u32 },
         Sink { tag: u32 },
         Internal { tag: u32 },
-        TransformerSecondary { tag: u32, num_coils: u32 },
+        TransformerSecondary { tag: u32 },
     }
 
     impl VertexTag {
@@ -29,7 +29,7 @@ pub mod circuit_graph {
                 Self::Source { tag }
                 | Self::Sink { tag }
                 | Self::Internal { tag }
-                | Self::TransformerSecondary { tag, num_coils: _ } => tag,
+                | Self::TransformerSecondary { tag } => tag,
             }
         }
 
@@ -830,6 +830,8 @@ pub mod circuit_graph {
 
 #[cfg(test)]
 mod tests {
+    use std::vec;
+
     use crate::circuit_graph::*;
 
     use faer_core::c64;
@@ -1429,13 +1431,7 @@ mod tests {
     fn create_transformer_circuit() -> Circuit<c64> {
         let source = VertexMetadata::new(Some(c64::new(6.0, 0.0)), VertexTag::Source { tag: 0 });
 
-        let transformer = VertexMetadata::new(
-            None,
-            VertexTag::TransformerSecondary {
-                tag: 1,
-                num_coils: 20,
-            },
-        );
+        let transformer = VertexMetadata::new(None, VertexTag::TransformerSecondary { tag: 1 });
 
         let internal1 = VertexMetadata::new(None, VertexTag::Internal { tag: 2 });
         let internal2 = VertexMetadata::new(None, VertexTag::Internal { tag: 3 });
@@ -1549,5 +1545,167 @@ mod tests {
             (solved_power[5] - c64::new(3133728.0 / 1540081.0, -725760.0 / 1540081.0)).abs()
                 < 1e-10
         );
+    }
+
+    /// Set up a circuit with series transformers.
+    ///
+    /// ```raw
+    /// ------------ ----------
+    /// |          | |        |
+    /// |          $ $       | |
+    /// |        1 $T$ 2     |R| 2ohm
+    /// |+         $ $       | |
+    /// V 17V      | |        |
+    /// |-         | ----------
+    /// |          | ----------
+    /// |          | |        |
+    /// |          $ $       | |
+    /// |        2 $T$ 3     |R| 1ohm
+    /// |          $ $       | |
+    /// |          | |        |
+    /// ------------ ----------
+    /// ```
+    fn create_series_transformer_circuit() -> Circuit<f64> {
+        let source = VertexMetadata::new(Some(17.0), VertexTag::Source { tag: 0 });
+        let transformer0 = VertexMetadata::new(None, VertexTag::TransformerSecondary { tag: 1 });
+        let transformer1 = VertexMetadata::new(None, VertexTag::TransformerSecondary { tag: 2 });
+        let internal = VertexMetadata::new(None, VertexTag::Internal { tag: 3 });
+        let sink0 = VertexMetadata::new(Some(0.0), VertexTag::Sink { tag: 4 });
+        let sink1 = VertexMetadata::new(Some(0.0), VertexTag::Sink { tag: 5 });
+        let sink2 = VertexMetadata::new(Some(0.0), VertexTag::Sink { tag: 6 });
+
+        let e1 = EdgeMetadata::new(0, 3, EdgeType::new_transformer(1, 1, 2));
+        let e2 = EdgeMetadata::new(3, 4, EdgeType::new_transformer(2, 2, 3));
+        let e3 = EdgeMetadata::new(1, 5, EdgeType::new_component(0.5));
+        let e4 = EdgeMetadata::new(2, 6, EdgeType::new_component(1.0));
+
+        Circuit::new(
+            vec![
+                source,
+                transformer0,
+                transformer1,
+                internal,
+                sink0,
+                sink1,
+                sink2,
+            ],
+            vec![e1, e2, e3, e4],
+        )
+    }
+
+    /// Test that the correct current values are found.
+    #[test]
+    fn series_transformer_solve_currents() {
+        let mut circuit = create_series_transformer_circuit();
+
+        circuit.solve_currents_and_voltages();
+
+        let solved_currents: Vec<f64> = circuit
+            .graph
+            .edge_weights()
+            .map(|weight| weight.current.unwrap())
+            .collect();
+
+        assert!(solved_currents[0] - 18.0 < 1e-10);
+        assert!(solved_currents[1] - 18.0 < 1e-10);
+        assert!(solved_currents[2] - 9.0 < 1e-10);
+        assert!(solved_currents[3] - 12.0 < 1e-10);
+    }
+
+    /// Test that the correct voltages are found.
+    #[test]
+    fn series_transformer_solve_voltages() {
+        let mut circuit = create_series_transformer_circuit();
+
+        circuit.solve_currents_and_voltages();
+
+        let solved_voltages: Vec<f64> = circuit
+            .graph
+            .node_weights()
+            .map(|weight| weight.voltage.unwrap())
+            .collect();
+
+        assert!(solved_voltages[0] - 17.0 < 1e-10);
+        assert!(solved_voltages[1] - 18.0 < 1e-10);
+        assert!(solved_voltages[2] - 12.0 < 1e-10);
+        assert!(solved_voltages[3] - 8.0 < 1e-10);
+        assert!(solved_voltages[4] - 0.0 < 1e-10);
+        assert!(solved_voltages[5] - 0.0 < 1e-10);
+        assert!(solved_voltages[6] - 0.0 < 1e-10);
+    }
+
+    /// Set up a circuit with parallel transformers.
+    ///
+    /// ```raw
+    /// ---------------------------
+    /// |       | ------------    | ------------
+    /// |       | |          |    | |          |
+    /// |+    2 $ $ 1       | | 1 $ $ 3       | |
+    /// V 8V    $T$    2ohm |R|   $T$    3ohm |R|
+    /// |-      $ $         | |   $ $         | |
+    /// |       | |          |    | |          |
+    /// |       | ------------    | ------------
+    /// ---------------------------
+    /// ```
+    fn create_parallel_transformer_circuit() -> Circuit<f64> {
+        let source = VertexMetadata::new(Some(8.0), VertexTag::Source { tag: 0 });
+
+        let transformer0 = VertexMetadata::new(None, VertexTag::TransformerSecondary { tag: 1 });
+        let transformer1 = VertexMetadata::new(None, VertexTag::TransformerSecondary { tag: 2 });
+
+        let sink0 = VertexMetadata::new(Some(0.0), VertexTag::Sink { tag: 3 });
+        let sink1 = VertexMetadata::new(Some(0.0), VertexTag::Sink { tag: 4 });
+        let sink2 = VertexMetadata::new(Some(0.0), VertexTag::Sink { tag: 5 });
+
+        let e1 = EdgeMetadata::new(0, 3, EdgeType::new_transformer(1, 2, 1));
+        let e2 = EdgeMetadata::new(0, 3, EdgeType::new_transformer(2, 1, 3));
+
+        let e3 = EdgeMetadata::new(1, 4, EdgeType::new_component(0.5));
+        let e4 = EdgeMetadata::new(2, 5, EdgeType::new_component(1.0 / 3.0));
+
+        Circuit::new(
+            vec![source, transformer0, transformer1, sink0, sink1, sink2],
+            vec![e1, e2, e3, e4],
+        )
+    }
+
+    /// Test that the correct current values are found.
+    #[test]
+    fn parallel_transformer_solve_currents() {
+        let mut circuit = create_parallel_transformer_circuit();
+
+        circuit.solve_currents_and_voltages();
+
+        let solved_currents: Vec<f64> = circuit
+            .graph
+            .edge_weights()
+            .map(|weight| weight.current.unwrap())
+            .collect();
+
+        assert!(solved_currents[0] - 1.0 < 1e-10);
+        assert!(solved_currents[1] - 24.0 < 1e-10);
+        assert!(solved_currents[2] - 2.0 < 1e-10);
+        assert!(solved_currents[3] - 8.0 < 1e-10);
+    }
+
+    /// Test that the correct voltages are found.
+    #[test]
+    fn parallel_transformer_solve_voltages() {
+        let mut circuit = create_parallel_transformer_circuit();
+
+        circuit.solve_currents_and_voltages();
+
+        let solved_voltages: Vec<f64> = circuit
+            .graph
+            .node_weights()
+            .map(|weight| weight.voltage.unwrap())
+            .collect();
+
+        assert!(solved_voltages[0] - 8.0 < 1e-10);
+        assert!(solved_voltages[1] - 4.0 < 1e-10);
+        assert!(solved_voltages[2] - 24.0 < 1e-10);
+        assert!(solved_voltages[3] - 0.0 < 1e-10);
+        assert!(solved_voltages[4] - 0.0 < 1e-10);
+        assert!(solved_voltages[5] - 0.0 < 1e-10);
     }
 }
