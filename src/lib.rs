@@ -102,28 +102,28 @@ pub mod circuit_graph {
     }
 
     pub enum EdgeType<T> {
-        Component {
+        PassiveComponent {
             admittance: T,
         },
         Transformer {
             tag: u32,
-            primary_coils: u32,
-            secondary_coils: u32,
+            num_primary_coils: u32,
+            num_secondary_coils: u32,
         },
     }
 
     impl<T> EdgeType<T> {
         /// Construct a new Component.
         pub fn new_component(admittance: T) -> Self {
-            Self::Component { admittance }
+            Self::PassiveComponent { admittance }
         }
 
         /// Construct a new Transformer.
-        pub fn new_transformer(tag: u32, primary_coils: u32, secondary_coils: u32) -> Self {
+        pub fn new_transformer(tag: u32, num_primary_coils: u32, num_secondary_coils: u32) -> Self {
             Self::Transformer {
                 tag,
-                primary_coils,
-                secondary_coils,
+                num_primary_coils,
+                num_secondary_coils,
             }
         }
     }
@@ -138,9 +138,12 @@ pub mod circuit_graph {
     /// - `G` is conductance (real-valued),
     /// - `B` is susceptance (real-valued), and
     /// - `j` is the imaginary unit.
-    ///
     /// In particular, the `c64` or `c32` types from `faer` are recommended for
     /// best performance.
+    /// 
+    /// Edges may in particular represent the primary side of a transformer.
+    /// Transformers are taken to be ideal in the current implementation, and do
+    /// not take an admittance value.
     pub struct EdgeMetadata<T> {
         pub tail: u32,
         pub head: u32,
@@ -174,7 +177,7 @@ pub mod circuit_graph {
         /// [transformer]: `EdgeType::Transformer`
         pub fn get_admittance(&self) -> &T {
             match &self.edge_type {
-                EdgeType::Component { admittance } => admittance,
+                EdgeType::PassiveComponent { admittance } => admittance,
                 EdgeType::Transformer { .. } => {
                     panic!("Attempted to get admittance of a transformer edge");
                 }
@@ -187,17 +190,17 @@ pub mod circuit_graph {
         pub fn is_transformer(&self) -> bool {
             match self.edge_type {
                 EdgeType::Transformer { .. } => true,
-                EdgeType::Component { .. } => false,
+                _ => false,
             }
         }
 
-        /// Returns true iff this edge is a [`Component`][component] edge.
+        /// Returns true iff this edge is a [`PassiveComponent`][component] edge.
         ///
-        /// [component]: `EdgeType::Component`
-        pub fn is_component(&self) -> bool {
+        /// [component]: `EdgeType::PassiveComponent`
+        pub fn is_passive_component(&self) -> bool {
             match self.edge_type {
-                EdgeType::Component { .. } => true,
-                EdgeType::Transformer { .. } => false,
+                EdgeType::PassiveComponent { .. } => true,
+                _ => false,
             }
         }
     }
@@ -206,7 +209,10 @@ pub mod circuit_graph {
     ///  - vertices are annotated with a [`VertexType`] and unique tag,
     ///  - vertices are annotated with a voltage (which may be [`None`]), and
     ///  - edges are annotated with a weight equal to the admittance (inverse of
-    /// impedance) of the component they represent.
+    /// impedance) of the component they represent,
+    ///  - except for edges representing transformers, which are annotated with
+    /// the number of coils on their primary and secondary windings, as well as
+    /// the tag of the vertex which serves as their secondary side.
     ///
     /// While the use of 'admittance' implies a complex value, using a real type
     /// will work also for DC circuits or, in theory, purely resistive circuits.
@@ -502,7 +508,7 @@ pub mod circuit_graph {
                 for edge_index in &path.1 {
                     let edge = self.graph.edge_weight(*edge_index).unwrap();
                     match edge.edge_type {
-                        EdgeType::Component { admittance } => {
+                        EdgeType::PassiveComponent { admittance } => {
                             let current_index = edge.current_id.unwrap();
                             // Add on this edge's contribution to what's there, it might be in series
                             let present_value = coeffs.read(i, current_index);
@@ -510,8 +516,8 @@ pub mod circuit_graph {
                         }
                         EdgeType::Transformer {
                             tag,
-                            primary_coils,
-                            secondary_coils,
+                            num_primary_coils,
+                            num_secondary_coils,
                         } => {
                             let secondary_node_index = self
                                 .graph
@@ -526,7 +532,7 @@ pub mod circuit_graph {
                                 i,
                                 num_unknown_currents + secondary_node_index,
                                 T::faer_from_f64(
-                                    f64::from(primary_coils) / f64::from(secondary_coils),
+                                    f64::from(num_primary_coils) / f64::from(num_secondary_coils),
                                 ),
                             );
                         }
@@ -567,8 +573,8 @@ pub mod circuit_graph {
                 match edge_weight.edge_type {
                     EdgeType::Transformer {
                         tag,
-                        primary_coils,
-                        secondary_coils,
+                        num_primary_coils,
+                        num_secondary_coils,
                     } => {
                         let secondary_index = self
                             .graph
@@ -581,7 +587,7 @@ pub mod circuit_graph {
                             i,
                             num_unknown_currents + secondary_index.index(),
                             T::faer_from_f64(
-                                f64::from(primary_coils) / f64::from(secondary_coils).faer_neg(),
+                                f64::from(num_primary_coils) / f64::from(num_secondary_coils).faer_neg(),
                             ),
                         );
                     }
@@ -614,8 +620,8 @@ pub mod circuit_graph {
                     .find(|weight| match weight.edge_type {
                         EdgeType::Transformer {
                             tag,
-                            primary_coils: _,
-                            secondary_coils: _,
+                            num_primary_coils: _,
+                            num_secondary_coils: _,
                         } => tag == node_tag,
                         _ => false,
                     })
@@ -624,9 +630,9 @@ pub mod circuit_graph {
                 let ratio = match transformer_edge.edge_type {
                     EdgeType::Transformer {
                         tag: _,
-                        primary_coils,
-                        secondary_coils,
-                    } => T::faer_from_f64(f64::from(primary_coils) / f64::from(secondary_coils)),
+                        num_primary_coils,
+                        num_secondary_coils,
+                    } => T::faer_from_f64(f64::from(num_primary_coils) / f64::from(num_secondary_coils)),
                     _ => {
                         panic!("Expected transformer edge");
                     }
@@ -662,7 +668,7 @@ pub mod circuit_graph {
                     .weight();
 
                 match edge.edge_type {
-                    EdgeType::Component { admittance } => {
+                    EdgeType::PassiveComponent { admittance } => {
                         coeffs.write(
                             i,
                             edge.current_id.unwrap(),
@@ -671,13 +677,13 @@ pub mod circuit_graph {
                     }
                     EdgeType::Transformer {
                         tag,
-                        primary_coils,
-                        secondary_coils,
+                        num_primary_coils,
+                        num_secondary_coils,
                     } => {
                         coeffs.write(
                             i,
                             num_unknown_currents + (tag as usize),
-                            T::faer_from_f64(f64::from(primary_coils) / f64::from(secondary_coils))
+                            T::faer_from_f64(f64::from(num_primary_coils) / f64::from(num_secondary_coils))
                                 .faer_neg(),
                         );
                     }
@@ -752,7 +758,7 @@ pub mod circuit_graph {
             let edge = self.graph.edge_weight(edge_index).unwrap();
 
             let power = match edge.edge_type {
-                EdgeType::Component { admittance } => {
+                EdgeType::PassiveComponent { admittance } => {
                     edge.current.unwrap().faer_mul(edge.current.unwrap()) * admittance.faer_inv()
                 }
                 EdgeType::Transformer { .. } => {
@@ -835,7 +841,7 @@ mod tests {
 
     #[test]
     fn create_single_edge() {
-        let e: EdgeMetadata<f64> = EdgeMetadata::new(0, 1, EdgeType::Component { admittance: 0.5 });
+        let e: EdgeMetadata<f64> = EdgeMetadata::new(0, 1, EdgeType::PassiveComponent { admittance: 0.5 });
 
         assert!(e.tail == 0);
         assert!(e.head == 1);
@@ -847,7 +853,7 @@ mod tests {
         let v1 = VertexMetadata::new(Some(1.0), 1, VertexType::Source);
         let v2 = VertexMetadata::new(Some(0.0), 2, VertexType::Sink);
 
-        let e = EdgeMetadata::new(1, 2, EdgeType::Component { admittance: 2.0 });
+        let e = EdgeMetadata::new(1, 2, EdgeType::PassiveComponent { admittance: 2.0 });
 
         let circuit = Circuit::new(vec![v1, v2], vec![e]);
 
@@ -869,7 +875,7 @@ mod tests {
         let source = VertexMetadata::new(Some(3.0), 0, VertexType::Source);
         let sink = VertexMetadata::new(Some(0.0), 1, VertexType::Sink);
 
-        let edge = EdgeMetadata::new(0, 1, EdgeType::Component { admittance: 0.5 });
+        let edge = EdgeMetadata::new(0, 1, EdgeType::PassiveComponent { admittance: 0.5 });
 
         Circuit::new(vec![source, sink], vec![edge])
     }
@@ -955,9 +961,9 @@ mod tests {
 
         let sink = VertexMetadata::new(Some(0.0), 2, VertexType::Sink);
 
-        let e1 = EdgeMetadata::new(0, 1, EdgeType::Component { admittance: 1.0 });
-        let e2 = EdgeMetadata::new(1, 2, EdgeType::Component { admittance: 1.0 });
-        let e3 = EdgeMetadata::new(1, 2, EdgeType::Component { admittance: 2.0 });
+        let e1 = EdgeMetadata::new(0, 1, EdgeType::PassiveComponent { admittance: 1.0 });
+        let e2 = EdgeMetadata::new(1, 2, EdgeType::PassiveComponent { admittance: 1.0 });
+        let e3 = EdgeMetadata::new(1, 2, EdgeType::PassiveComponent { admittance: 2.0 });
 
         Circuit::new(vec![source, v1, sink], vec![e1, e2, e3])
     }
@@ -1075,10 +1081,10 @@ mod tests {
 
         let sink = VertexMetadata::new(Some(0.0), 3, VertexType::Sink);
 
-        let e1 = EdgeMetadata::new(0, 1, EdgeType::Component { admittance: 1.0 });
-        let e2 = EdgeMetadata::new(1, 3, EdgeType::Component { admittance: 1.0 });
-        let e3 = EdgeMetadata::new(1, 2, EdgeType::Component { admittance: 2.0 });
-        let e4 = EdgeMetadata::new(2, 3, EdgeType::Component { admittance: 0.5 });
+        let e1 = EdgeMetadata::new(0, 1, EdgeType::PassiveComponent { admittance: 1.0 });
+        let e2 = EdgeMetadata::new(1, 3, EdgeType::PassiveComponent { admittance: 1.0 });
+        let e3 = EdgeMetadata::new(1, 2, EdgeType::PassiveComponent { admittance: 2.0 });
+        let e4 = EdgeMetadata::new(2, 3, EdgeType::PassiveComponent { admittance: 0.5 });
 
         Circuit::new(vec![source, v1, v2, sink], vec![e1, e2, e3, e4])
     }
@@ -1200,12 +1206,12 @@ mod tests {
 
         let sink = VertexMetadata::new(Some(0.0), 4, VertexType::Sink);
 
-        let e0 = EdgeMetadata::new(0, 2, EdgeType::Component { admittance: 1.0 });
-        let e1 = EdgeMetadata::new(2, 3, EdgeType::Component { admittance: 1.0 });
-        let e2 = EdgeMetadata::new(2, 3, EdgeType::Component { admittance: 1.0 });
-        let e3 = EdgeMetadata::new(1, 3, EdgeType::Component { admittance: 1.0 });
-        let e4 = EdgeMetadata::new(3, 4, EdgeType::Component { admittance: 1.0 });
-        let e5 = EdgeMetadata::new(3, 4, EdgeType::Component { admittance: 1.0 });
+        let e0 = EdgeMetadata::new(0, 2, EdgeType::PassiveComponent { admittance: 1.0 });
+        let e1 = EdgeMetadata::new(2, 3, EdgeType::PassiveComponent { admittance: 1.0 });
+        let e2 = EdgeMetadata::new(2, 3, EdgeType::PassiveComponent { admittance: 1.0 });
+        let e3 = EdgeMetadata::new(1, 3, EdgeType::PassiveComponent { admittance: 1.0 });
+        let e4 = EdgeMetadata::new(3, 4, EdgeType::PassiveComponent { admittance: 1.0 });
+        let e5 = EdgeMetadata::new(3, 4, EdgeType::PassiveComponent { admittance: 1.0 });
 
         Circuit::new(
             vec![source0, source1, v0, v1, sink],
@@ -1316,21 +1322,21 @@ mod tests {
         let e1 = EdgeMetadata::new(
             0,
             1,
-            EdgeType::Component {
+            EdgeType::PassiveComponent {
                 admittance: c64::new(0.0, 0.5),
             },
         );
         let e2 = EdgeMetadata::new(
             1,
             2,
-            EdgeType::Component {
+            EdgeType::PassiveComponent {
                 admittance: c64::new(0.0, -1.0),
             },
         );
         let e3 = EdgeMetadata::new(
             2,
             3,
-            EdgeType::Component {
+            EdgeType::PassiveComponent {
                 admittance: c64::new(0.5, 0.0),
             },
         );
