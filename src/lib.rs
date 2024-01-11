@@ -9,70 +9,54 @@ pub mod circuit_graph {
     use petgraph::prelude::*;
 
     #[derive(PartialEq, Eq)]
-    pub enum VertexTag {
-        Source { tag: u32 },
-        Sink { tag: u32 },
-        Internal { tag: u32 },
-        TransformerSecondary { tag: u32 },
+    pub enum VertexType {
+        Source,
+        Sink,
+        Internal,
+        TransformerSecondary,
     }
 
-    impl VertexTag {
-        /// Returns the tag that this [`VertexTag`] holds, no matter the variant.
-        ///
-        /// # Panics
-        /// This will panic if the [`VertexTag`] is a [`Transformer`][transformer]
+    impl VertexType {
+        /// Returns whether this [`VertexType`] is of the [`Internal`][internal]
         /// variant.
         ///
-        /// [transformer]: `VertexTag::Transformer`
-        pub fn get_tag(&self) -> &u32 {
-            match self {
-                Self::Source { tag }
-                | Self::Sink { tag }
-                | Self::Internal { tag }
-                | Self::TransformerSecondary { tag } => tag,
-            }
-        }
-
-        /// Returns whether this [`VertexTag`] is of the [`Internal`][internal]
-        /// variant.
-        ///
-        /// [internal]: `VertexTag::Internal`
+        /// [internal]: `VertexType::Internal`
         pub fn is_internal(&self) -> bool {
             match self {
-                Self::Internal { .. } => true,
+                Self::Internal => true,
                 _ => false,
             }
         }
 
-        /// Returns whether this [`VertexTag`] is of the [`Source`][source]
+        /// Returns whether this [`VertexType`] is of the [`Source`][source]
         /// variant.
         ///
-        /// [source]: `VertexTag::Source`
+        /// [source]: `VertexType::Source`
         pub fn is_source(&self) -> bool {
             match self {
-                Self::Source { .. } => true,
+                Self::Source => true,
                 _ => false,
             }
         }
 
-        /// Returns whether this [`VertexTag`] is of the [`Sink`][sink]
+        /// Returns whether this [`VertexType`] is of the [`Sink`][sink]
         /// variant.
         ///
-        /// [sink]: `VertexTag::Sink`
+        /// [sink]: `VertexType::Sink`
         pub fn is_sink(&self) -> bool {
             match self {
-                Self::Sink { .. } => true,
+                Self::Sink => true,
                 _ => false,
             }
         }
 
-        /// Returns wether this [`VertexTag`] is of the [`TransformerSecondary`][secondary]
+        /// Returns wether this [`VertexType`] is of the [`TransformerSecondary`][secondary]
         /// variant.
         ///
-        /// [secondary]: `VertexTag::TransformerSecondary`
+        /// [secondary]: `VertexType::TransformerSecondary`
         pub fn is_transformer_secondary(&self) -> bool {
             match self {
-                Self::TransformerSecondary { .. } => true,
+                Self::TransformerSecondary => true,
                 _ => false,
             }
         }
@@ -80,7 +64,8 @@ pub mod circuit_graph {
 
     pub struct VertexMetadata<T> {
         pub voltage: Option<T>,
-        pub vertex_tag: VertexTag,
+        pub tag: u32,
+        pub vertex_type: VertexType,
         pub power: Option<T>,
     }
 
@@ -90,21 +75,25 @@ pub mod circuit_graph {
         /// will have [`None`] instead.
         ///
         /// # Panics
-        /// This constructor panics if the given `vertex_tag` is either
-        /// `TransformerPrimary` or `TransformerSecondary`; these types are for
-        /// internal use and should not be constructed directly.
-        pub fn new(voltage: Option<T>, vertex_tag: VertexTag) -> Self {
-            match vertex_tag {
-                VertexTag::Internal { .. } | VertexTag::TransformerSecondary { .. } => Self {
+        /// This constructor panics if tthe given voltage is [`None`] and the
+        /// vertex_type is [`Sink`][sink] or [`Source`][source]
+        /// 
+        /// [sink]: `VertexType::Sink`
+        /// [source]: `VertexType::Source`
+        pub fn new(voltage: Option<T>, tag: u32, vertex_type: VertexType) -> Self {
+            match vertex_type {
+                VertexType::Internal { .. } | VertexType::TransformerSecondary { .. } => Self {
                     voltage: None,
-                    vertex_tag,
+                    tag,
+                    vertex_type,
                     power: None,
                 },
-                VertexTag::Sink { .. } | VertexTag::Source { .. } => {
+                VertexType::Sink { .. } | VertexType::Source { .. } => {
                     assert!(!voltage.is_none());
                     Self {
                         voltage,
-                        vertex_tag,
+                        tag,
+                        vertex_type,
                         power: None,
                     }
                 }
@@ -214,7 +203,7 @@ pub mod circuit_graph {
     }
 
     /// A struct representing a passive circuit. It relies on a flow graph where
-    ///  - vertices are annotated with a [`VertexTag`],
+    ///  - vertices are annotated with a [`VertexType`] and unique tag,
     ///  - vertices are annotated with a voltage (which may be [`None`]), and
     ///  - edges are annotated with a weight equal to the admittance (inverse of
     /// impedance) of the component they represent.
@@ -239,7 +228,7 @@ pub mod circuit_graph {
             let mut vertex_indices: HashMap<u32, NodeIndex> = HashMap::new();
 
             for vertex in vertices {
-                let tag = *vertex.vertex_tag.get_tag();
+                let tag = vertex.tag;
                 let node_index = graph.add_node(vertex);
                 vertex_indices.insert(tag, node_index);
             }
@@ -333,7 +322,7 @@ pub mod circuit_graph {
             // and sources have their voltage predetermined.
             self.graph
                 .node_weights()
-                .filter(|v| v.vertex_tag.is_internal() || v.vertex_tag.is_transformer_secondary())
+                .filter(|v| v.vertex_type.is_internal() || v.vertex_type.is_transformer_secondary())
                 .count()
         }
 
@@ -421,7 +410,7 @@ pub mod circuit_graph {
                 .graph
                 .node_indices()
                 .filter(|index| {
-                    let tag = &self.graph.node_weight(*index).unwrap().vertex_tag;
+                    let tag = &self.graph.node_weight(*index).unwrap().vertex_type;
                     tag.is_source() || tag.is_sink()
                 })
                 .collect();
@@ -434,7 +423,7 @@ pub mod circuit_graph {
                     self.graph
                         .node_weight(*index)
                         .unwrap()
-                        .vertex_tag
+                        .vertex_type
                         .is_internal()
                 })
                 .collect();
@@ -447,7 +436,7 @@ pub mod circuit_graph {
                     self.graph
                         .node_weight(*index)
                         .unwrap()
-                        .vertex_tag
+                        .vertex_type
                         .is_transformer_secondary()
                 })
                 .collect();
@@ -464,7 +453,7 @@ pub mod circuit_graph {
                     self.graph
                         .node_weight(*index)
                         .unwrap()
-                        .vertex_tag
+                        .vertex_type
                         .is_internal()
                         && (self.graph.edges_directed(*index, Incoming).count() != 1
                             || self.graph.edges_directed(*index, Outgoing).count() != 1)
@@ -528,7 +517,7 @@ pub mod circuit_graph {
                                 .graph
                                 .node_indices()
                                 .find(|index| {
-                                    *self.graph.node_weight(*index).unwrap().vertex_tag.get_tag()
+                                    self.graph.node_weight(*index).unwrap().tag
                                         == tag
                                 })
                                 .unwrap()
@@ -585,7 +574,7 @@ pub mod circuit_graph {
                             .graph
                             .node_indices()
                             .find(|index| {
-                                *self.graph.node_weight(*index).unwrap().vertex_tag.get_tag() == tag
+                                self.graph.node_weight(*index).unwrap().tag == tag
                             })
                             .unwrap();
                         coeffs.write(
@@ -617,8 +606,7 @@ pub mod circuit_graph {
                     .graph
                     .node_weight(node_index)
                     .unwrap()
-                    .vertex_tag
-                    .get_tag();
+                    .tag;
 
                 let transformer_edge = self
                     .graph
@@ -628,7 +616,7 @@ pub mod circuit_graph {
                             tag,
                             primary_coils: _,
                             secondary_coils: _,
-                        } => tag == *node_tag,
+                        } => tag == node_tag,
                         _ => false,
                     })
                     .unwrap();
@@ -839,10 +827,10 @@ mod tests {
 
     #[test]
     fn create_single_vertex() {
-        let v: VertexMetadata<f64> = VertexMetadata::new(Some(1f64), VertexTag::Source { tag: 0 });
+        let v: VertexMetadata<f64> = VertexMetadata::new(Some(1f64), 0, VertexType::Source);
 
         assert!(v.voltage.unwrap() == 1f64);
-        assert!(v.vertex_tag == VertexTag::Source { tag: 0 });
+        assert!(v.vertex_type == VertexType::Source);
     }
 
     #[test]
@@ -856,8 +844,8 @@ mod tests {
 
     #[test]
     fn create_graph() {
-        let v1 = VertexMetadata::new(Some(1.0), VertexTag::Source { tag: 1 });
-        let v2 = VertexMetadata::new(Some(0.0), VertexTag::Sink { tag: 2 });
+        let v1 = VertexMetadata::new(Some(1.0), 1, VertexType::Source);
+        let v2 = VertexMetadata::new(Some(0.0), 2, VertexType::Sink);
 
         let e = EdgeMetadata::new(1, 2, EdgeType::Component { admittance: 2.0 });
 
@@ -878,8 +866,8 @@ mod tests {
     /// ----------------
     /// ```
     fn create_simple_circuit() -> Circuit<f64> {
-        let source = VertexMetadata::new(Some(3.0), VertexTag::Source { tag: 0 });
-        let sink = VertexMetadata::new(Some(0.0), VertexTag::Sink { tag: 1 });
+        let source = VertexMetadata::new(Some(3.0), 0, VertexType::Source);
+        let sink = VertexMetadata::new(Some(0.0), 1, VertexType::Sink);
 
         let edge = EdgeMetadata::new(0, 1, EdgeType::Component { admittance: 0.5 });
 
@@ -895,7 +883,7 @@ mod tests {
         let source = circuit
             .graph
             .node_weights()
-            .find(|v| v.vertex_tag.is_source())
+            .find(|v| v.vertex_type.is_source())
             .unwrap();
         assert!(source.voltage.unwrap() == 3.0);
     }
@@ -961,11 +949,11 @@ mod tests {
     /// ------------------------
     /// ```
     fn create_complex_circuit() -> Circuit<f64> {
-        let source = VertexMetadata::new(Some(2.0), VertexTag::Source { tag: 0 });
+        let source = VertexMetadata::new(Some(2.0), 0, VertexType::Source);
 
-        let v1 = VertexMetadata::new(None, VertexTag::Internal { tag: 1 });
+        let v1 = VertexMetadata::new(None, 1, VertexType::Internal);
 
-        let sink = VertexMetadata::new(Some(0.0), VertexTag::Sink { tag: 2 });
+        let sink = VertexMetadata::new(Some(0.0), 2, VertexType::Sink);
 
         let e1 = EdgeMetadata::new(0, 1, EdgeType::Component { admittance: 1.0 });
         let e2 = EdgeMetadata::new(1, 2, EdgeType::Component { admittance: 1.0 });
@@ -982,7 +970,7 @@ mod tests {
         let source = circuit
             .graph
             .node_weights()
-            .find(|v| v.vertex_tag.is_source())
+            .find(|v| v.vertex_type.is_source())
             .unwrap();
 
         assert_eq!(source.voltage.unwrap(), 2.0);
@@ -1033,7 +1021,7 @@ mod tests {
         let node = circuit
             .graph
             .node_weights()
-            .find(|node| node.vertex_tag.is_internal())
+            .find(|node| node.vertex_type.is_internal())
             .unwrap();
 
         assert!(node.voltage.unwrap() - 0.5 < 1e-10);
@@ -1055,7 +1043,7 @@ mod tests {
         let node_power = circuit
             .graph
             .node_weights()
-            .find(|node| node.vertex_tag.is_internal())
+            .find(|node| node.vertex_type.is_internal())
             .unwrap()
             .power
             .unwrap();
@@ -1080,12 +1068,12 @@ mod tests {
     /// ------------------------
     /// ```
     fn create_series_circuit() -> Circuit<f64> {
-        let source = VertexMetadata::new(Some(2.0), VertexTag::Source { tag: 0 });
+        let source = VertexMetadata::new(Some(2.0), 0, VertexType::Source);
 
-        let v1 = VertexMetadata::new(None, VertexTag::Internal { tag: 1 });
-        let v2 = VertexMetadata::new(None, VertexTag::Internal { tag: 2 });
+        let v1 = VertexMetadata::new(None, 1, VertexType::Internal);
+        let v2 = VertexMetadata::new(None, 2, VertexType::Internal);
 
-        let sink = VertexMetadata::new(Some(0.0), VertexTag::Sink { tag: 3 });
+        let sink = VertexMetadata::new(Some(0.0), 3, VertexType::Sink);
 
         let e1 = EdgeMetadata::new(0, 1, EdgeType::Component { admittance: 1.0 });
         let e2 = EdgeMetadata::new(1, 3, EdgeType::Component { admittance: 1.0 });
@@ -1204,13 +1192,13 @@ mod tests {
     fn create_multiple_source_circuit() -> Circuit<f64> {
         // Note that source0 represents the node at the very top left of the circuit,
         // and thus has the combined voltage of both the circuit's voltage sources.
-        let source0 = VertexMetadata::new(Some(5.0), VertexTag::Source { tag: 0 });
-        let source1 = VertexMetadata::new(Some(2.0), VertexTag::Source { tag: 1 });
+        let source0 = VertexMetadata::new(Some(5.0), 0, VertexType::Source);
+        let source1 = VertexMetadata::new(Some(2.0), 1, VertexType::Source);
 
-        let v0 = VertexMetadata::new(None, VertexTag::Internal { tag: 2 });
-        let v1 = VertexMetadata::new(None, VertexTag::Internal { tag: 3 });
+        let v0 = VertexMetadata::new(None, 2, VertexType::Internal);
+        let v1 = VertexMetadata::new(None, 3, VertexType::Internal);
 
-        let sink = VertexMetadata::new(Some(0.0), VertexTag::Sink { tag: 4 });
+        let sink = VertexMetadata::new(Some(0.0), 4, VertexType::Sink);
 
         let e0 = EdgeMetadata::new(0, 2, EdgeType::Component { admittance: 1.0 });
         let e1 = EdgeMetadata::new(2, 3, EdgeType::Component { admittance: 1.0 });
@@ -1320,10 +1308,10 @@ mod tests {
     ///       2ohm
     /// ```
     fn create_ac_circuit() -> Circuit<c64> {
-        let source = VertexMetadata::new(Some(c64::new(4.0, 0.0)), VertexTag::Source { tag: 0 });
-        let v1 = VertexMetadata::new(None, VertexTag::Internal { tag: 1 });
-        let v2 = VertexMetadata::new(None, VertexTag::Internal { tag: 2 });
-        let sink = VertexMetadata::new(Some(c64::faer_zero()), VertexTag::Sink { tag: 3 });
+        let source = VertexMetadata::new(Some(c64::new(4.0, 0.0)), 0, VertexType::Source);
+        let v1 = VertexMetadata::new(None, 1, VertexType::Internal);
+        let v2 = VertexMetadata::new(None, 2, VertexType::Internal);
+        let sink = VertexMetadata::new(Some(c64::faer_zero()), 3, VertexType::Sink);
 
         let e1 = EdgeMetadata::new(
             0,
@@ -1429,18 +1417,18 @@ mod tests {
     ///     1ohm           2ohm
     /// ```
     fn create_transformer_circuit() -> Circuit<c64> {
-        let source = VertexMetadata::new(Some(c64::new(6.0, 0.0)), VertexTag::Source { tag: 0 });
+        let source = VertexMetadata::new(Some(c64::new(6.0, 0.0)), 0, VertexType::Source);
 
-        let transformer = VertexMetadata::new(None, VertexTag::TransformerSecondary { tag: 1 });
+        let transformer = VertexMetadata::new(None, 1, VertexType::TransformerSecondary);
 
-        let internal1 = VertexMetadata::new(None, VertexTag::Internal { tag: 2 });
-        let internal2 = VertexMetadata::new(None, VertexTag::Internal { tag: 3 });
-        let internal3 = VertexMetadata::new(None, VertexTag::Internal { tag: 4 });
-        let internal4 = VertexMetadata::new(None, VertexTag::Internal { tag: 5 });
+        let internal1 = VertexMetadata::new(None, 2, VertexType::Internal);
+        let internal2 = VertexMetadata::new(None, 3, VertexType::Internal);
+        let internal3 = VertexMetadata::new(None, 4, VertexType::Internal);
+        let internal4 = VertexMetadata::new(None, 5, VertexType::Internal);
 
-        let primary_sink = VertexMetadata::new(Some(c64::faer_zero()), VertexTag::Sink { tag: 6 });
+        let primary_sink = VertexMetadata::new(Some(c64::faer_zero()), 6, VertexType::Sink);
         let secondary_sink =
-            VertexMetadata::new(Some(c64::faer_zero()), VertexTag::Sink { tag: 7 });
+            VertexMetadata::new(Some(c64::faer_zero()), 7, VertexType::Sink);
 
         let e0 = EdgeMetadata::new(0, 2, EdgeType::new_component(c64::new(0.5, 0.0)));
         let e1 = EdgeMetadata::new(2, 3, EdgeType::new_transformer(1, 20, 30));
@@ -1566,13 +1554,13 @@ mod tests {
     /// ------------ ----------
     /// ```
     fn create_series_transformer_circuit() -> Circuit<f64> {
-        let source = VertexMetadata::new(Some(17.0), VertexTag::Source { tag: 0 });
-        let transformer0 = VertexMetadata::new(None, VertexTag::TransformerSecondary { tag: 1 });
-        let transformer1 = VertexMetadata::new(None, VertexTag::TransformerSecondary { tag: 2 });
-        let internal = VertexMetadata::new(None, VertexTag::Internal { tag: 3 });
-        let sink0 = VertexMetadata::new(Some(0.0), VertexTag::Sink { tag: 4 });
-        let sink1 = VertexMetadata::new(Some(0.0), VertexTag::Sink { tag: 5 });
-        let sink2 = VertexMetadata::new(Some(0.0), VertexTag::Sink { tag: 6 });
+        let source = VertexMetadata::new(Some(17.0), 0, VertexType::Source);
+        let transformer0 = VertexMetadata::new(None, 1, VertexType::TransformerSecondary);
+        let transformer1 = VertexMetadata::new(None, 2, VertexType::TransformerSecondary);
+        let internal = VertexMetadata::new(None, 3, VertexType::Internal);
+        let sink0 = VertexMetadata::new(Some(0.0), 4, VertexType::Sink);
+        let sink1 = VertexMetadata::new(Some(0.0), 5, VertexType::Sink);
+        let sink2 = VertexMetadata::new(Some(0.0), 6, VertexType::Sink);
 
         let e1 = EdgeMetadata::new(0, 3, EdgeType::new_transformer(1, 1, 2));
         let e2 = EdgeMetadata::new(3, 4, EdgeType::new_transformer(2, 2, 3));
@@ -1648,14 +1636,14 @@ mod tests {
     /// ---------------------------
     /// ```
     fn create_parallel_transformer_circuit() -> Circuit<f64> {
-        let source = VertexMetadata::new(Some(8.0), VertexTag::Source { tag: 0 });
+        let source = VertexMetadata::new(Some(8.0), 0, VertexType::Source);
 
-        let transformer0 = VertexMetadata::new(None, VertexTag::TransformerSecondary { tag: 1 });
-        let transformer1 = VertexMetadata::new(None, VertexTag::TransformerSecondary { tag: 2 });
+        let transformer0 = VertexMetadata::new(None, 1, VertexType::TransformerSecondary);
+        let transformer1 = VertexMetadata::new(None, 2, VertexType::TransformerSecondary);
 
-        let sink0 = VertexMetadata::new(Some(0.0), VertexTag::Sink { tag: 3 });
-        let sink1 = VertexMetadata::new(Some(0.0), VertexTag::Sink { tag: 4 });
-        let sink2 = VertexMetadata::new(Some(0.0), VertexTag::Sink { tag: 5 });
+        let sink0 = VertexMetadata::new(Some(0.0), 3, VertexType::Sink);
+        let sink1 = VertexMetadata::new(Some(0.0), 4, VertexType::Sink);
+        let sink2 = VertexMetadata::new(Some(0.0), 5, VertexType::Sink);
 
         let e1 = EdgeMetadata::new(0, 3, EdgeType::new_transformer(1, 2, 1));
         let e2 = EdgeMetadata::new(0, 3, EdgeType::new_transformer(2, 1, 3));
