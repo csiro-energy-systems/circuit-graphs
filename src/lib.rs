@@ -399,6 +399,12 @@ pub mod circuit_graph {
                 + std::ops::Mul<Output = T>,
         > Circuit<T>
     {
+        /// Returns the ratio of primary to secondary coils in a transformer winding
+        /// as a `T`.
+        fn get_coil_ratio(num_primary_coils: u32, num_secondary_coils: u32) -> T {
+            T::faer_from_f64(f64::from(num_primary_coils) / f64::from(num_secondary_coils))
+        }
+
         /// Use the given information about the circuit to determine the current
         /// through every edge and the voltage at every node.
         ///
@@ -514,12 +520,11 @@ pub mod circuit_graph {
                                 .find(|index| self.graph.node_weight(*index).unwrap().tag == tag)
                                 .unwrap()
                                 .index();
+
                             coeffs.write(
                                 i,
                                 num_unknown_currents + secondary_node_index,
-                                T::faer_from_f64(
-                                    f64::from(num_primary_coils) / f64::from(num_secondary_coils),
-                                ),
+                                Self::get_coil_ratio(num_primary_coils, num_secondary_coils),
                             );
                         }
                     }
@@ -573,13 +578,11 @@ pub mod circuit_graph {
                             .node_indices()
                             .find(|index| self.graph.node_weight(*index).unwrap().tag == tag)
                             .unwrap();
+
                         coeffs.write(
                             i,
                             num_unknown_currents + secondary_index.index(),
-                            T::faer_from_f64(
-                                f64::from(num_primary_coils)
-                                    / f64::from(num_secondary_coils).faer_neg(),
-                            ),
+                            Self::get_coil_ratio(num_primary_coils, num_secondary_coils).faer_neg(),
                         );
                     }
                     _ => {
@@ -625,9 +628,7 @@ pub mod circuit_graph {
                         tag: _,
                         num_primary_coils,
                         num_secondary_coils,
-                    } => T::faer_from_f64(
-                        f64::from(num_primary_coils) / f64::from(num_secondary_coils),
-                    ),
+                    } => Self::get_coil_ratio(num_primary_coils, num_secondary_coils),
                     _ => {
                         panic!("Expected transformer edge");
                     }
@@ -686,10 +687,7 @@ pub mod circuit_graph {
                         coeffs.write(
                             i,
                             num_unknown_currents + (tag as usize),
-                            T::faer_from_f64(
-                                f64::from(num_primary_coils) / f64::from(num_secondary_coils),
-                            )
-                            .faer_neg(),
+                            Self::get_coil_ratio(num_primary_coils, num_secondary_coils).faer_neg(),
                         );
                     }
                 }
