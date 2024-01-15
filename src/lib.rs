@@ -840,8 +840,7 @@ mod tests {
 
     #[test]
     fn create_single_edge() {
-        let e: EdgeMetadata<f64> =
-            EdgeMetadata::new(0, 1, EdgeType::PassiveComponent { admittance: 0.5 });
+        let e: EdgeMetadata<f64> = EdgeMetadata::new(0, 1, EdgeType::new_component(0.5));
 
         assert!(e.tail == 0);
         assert!(e.head == 1);
@@ -853,7 +852,7 @@ mod tests {
         let v1 = VertexMetadata::new(Some(1.0), 1, VertexType::Source);
         let v2 = VertexMetadata::new(Some(0.0), 2, VertexType::Sink);
 
-        let e = EdgeMetadata::new(1, 2, EdgeType::PassiveComponent { admittance: 2.0 });
+        let e = EdgeMetadata::new(1, 2, EdgeType::new_component(2.0));
 
         let circuit = Circuit::new(vec![v1, v2], vec![e]);
 
@@ -875,7 +874,7 @@ mod tests {
         let source = VertexMetadata::new(Some(3.0), 0, VertexType::Source);
         let sink = VertexMetadata::new(Some(0.0), 1, VertexType::Sink);
 
-        let edge = EdgeMetadata::new(0, 1, EdgeType::PassiveComponent { admittance: 0.5 });
+        let edge = EdgeMetadata::new(0, 1, EdgeType::new_component(0.5));
 
         Circuit::new(vec![source, sink], vec![edge])
     }
@@ -961,9 +960,9 @@ mod tests {
 
         let sink = VertexMetadata::new(Some(0.0), 2, VertexType::Sink);
 
-        let e1 = EdgeMetadata::new(0, 1, EdgeType::PassiveComponent { admittance: 1.0 });
-        let e2 = EdgeMetadata::new(1, 2, EdgeType::PassiveComponent { admittance: 1.0 });
-        let e3 = EdgeMetadata::new(1, 2, EdgeType::PassiveComponent { admittance: 2.0 });
+        let e1 = EdgeMetadata::new(0, 1, EdgeType::new_component(1.0));
+        let e2 = EdgeMetadata::new(1, 2, EdgeType::new_component(1.0));
+        let e3 = EdgeMetadata::new(1, 2, EdgeType::new_component(2.0));
 
         Circuit::new(vec![source, v1, sink], vec![e1, e2, e3])
     }
@@ -1081,10 +1080,10 @@ mod tests {
 
         let sink = VertexMetadata::new(Some(0.0), 3, VertexType::Sink);
 
-        let e1 = EdgeMetadata::new(0, 1, EdgeType::PassiveComponent { admittance: 1.0 });
-        let e2 = EdgeMetadata::new(1, 3, EdgeType::PassiveComponent { admittance: 1.0 });
-        let e3 = EdgeMetadata::new(1, 2, EdgeType::PassiveComponent { admittance: 2.0 });
-        let e4 = EdgeMetadata::new(2, 3, EdgeType::PassiveComponent { admittance: 0.5 });
+        let e1 = EdgeMetadata::new(0, 1, EdgeType::new_component(1.0));
+        let e2 = EdgeMetadata::new(1, 3, EdgeType::new_component(1.0));
+        let e3 = EdgeMetadata::new(1, 2, EdgeType::new_component(2.0));
+        let e4 = EdgeMetadata::new(2, 3, EdgeType::new_component(0.5));
 
         Circuit::new(vec![source, v1, v2, sink], vec![e1, e2, e3, e4])
     }
@@ -1206,12 +1205,12 @@ mod tests {
 
         let sink = VertexMetadata::new(Some(0.0), 4, VertexType::Sink);
 
-        let e0 = EdgeMetadata::new(0, 2, EdgeType::PassiveComponent { admittance: 1.0 });
-        let e1 = EdgeMetadata::new(2, 3, EdgeType::PassiveComponent { admittance: 1.0 });
-        let e2 = EdgeMetadata::new(2, 3, EdgeType::PassiveComponent { admittance: 1.0 });
-        let e3 = EdgeMetadata::new(1, 3, EdgeType::PassiveComponent { admittance: 1.0 });
-        let e4 = EdgeMetadata::new(3, 4, EdgeType::PassiveComponent { admittance: 1.0 });
-        let e5 = EdgeMetadata::new(3, 4, EdgeType::PassiveComponent { admittance: 1.0 });
+        let e0 = EdgeMetadata::new(0, 2, EdgeType::new_component(1.0));
+        let e1 = EdgeMetadata::new(2, 3, EdgeType::new_component(1.0));
+        let e2 = EdgeMetadata::new(2, 3, EdgeType::new_component(1.0));
+        let e3 = EdgeMetadata::new(1, 3, EdgeType::new_component(1.0));
+        let e4 = EdgeMetadata::new(3, 4, EdgeType::new_component(1.0));
+        let e5 = EdgeMetadata::new(3, 4, EdgeType::new_component(1.0));
 
         Circuit::new(
             vec![source0, source1, v0, v1, sink],
@@ -1319,27 +1318,9 @@ mod tests {
         let v2 = VertexMetadata::new(None, 2, VertexType::Internal);
         let sink = VertexMetadata::new(Some(c64::faer_zero()), 3, VertexType::Sink);
 
-        let e1 = EdgeMetadata::new(
-            0,
-            1,
-            EdgeType::PassiveComponent {
-                admittance: c64::new(0.0, 0.5),
-            },
-        );
-        let e2 = EdgeMetadata::new(
-            1,
-            2,
-            EdgeType::PassiveComponent {
-                admittance: c64::new(0.0, -1.0),
-            },
-        );
-        let e3 = EdgeMetadata::new(
-            2,
-            3,
-            EdgeType::PassiveComponent {
-                admittance: c64::new(0.5, 0.0),
-            },
-        );
+        let e1 = EdgeMetadata::new(0, 1, EdgeType::new_component(c64::new(0.0, 0.5)));
+        let e2 = EdgeMetadata::new(1, 2, EdgeType::new_component(c64::new(0.0, -1.0)));
+        let e3 = EdgeMetadata::new(2, 3, EdgeType::new_component(c64::new(0.5, 0.0)));
 
         Circuit::new(vec![source, v1, v2, sink], vec![e1, e2, e3])
     }
