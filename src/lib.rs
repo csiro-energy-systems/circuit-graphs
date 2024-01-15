@@ -77,7 +77,7 @@ pub mod circuit_graph {
         /// will have [`None`] instead.
         ///
         /// # Panics
-        /// This constructor panics if tthe given voltage is [`None`] and the
+        /// This constructor panics if the given voltage is [`None`] and the
         /// vertex_type is [`Sink`][sink] or [`Source`][source]
         ///
         /// [sink]: `VertexType::Sink`
@@ -140,6 +140,7 @@ pub mod circuit_graph {
     /// - `G` is conductance (real-valued),
     /// - `B` is susceptance (real-valued), and
     /// - `j` is the imaginary unit.
+    ///
     /// In particular, the `c64` or `c32` types from `faer` are recommended for
     /// best performance.
     ///
@@ -321,17 +322,18 @@ pub mod circuit_graph {
 
         /// Count the number of unknown voltages that need to be found when solving.
         pub fn count_unknown_voltages(&self) -> usize {
-            // Here we simply count the number of vertices with vertex_type Internal; sinks
-            // and sources have their voltage predetermined.
+            // Here we simply count the number of vertices with vertex_type Internal and
+            // TransformerSecondary; sinks and sources have their voltage predetermined.
             self.graph
                 .node_weights()
                 .filter(|v| v.vertex_type.is_internal() || v.vertex_type.is_transformer_secondary())
                 .count()
         }
 
-        /// Find the sequences of edges which form source->sink paths within the circuit.
-        /// It also finds paths from the secondary side of transformers to sinks; these
-        /// would otherwise not be found.
+        /// Find the sequences of edges which form source->sink paths within the
+        /// circuit. It also finds paths from the secondary side of transformers to
+        /// sinks; these function as sources but with voltage determined by another part
+        /// of the circuit.
         pub fn find_paths(&self) -> Vec<(NodeIndex, Vec<EdgeIndex>)> {
             let source_indices: Vec<NodeIndex> = self.graph.externals(Incoming).collect();
             let sink_indices: Vec<NodeIndex> = self.graph.externals(Outgoing).collect();
@@ -340,7 +342,7 @@ pub mod circuit_graph {
 
             for source_index in &source_indices {
                 for sink_index in &sink_indices {
-                    paths.append(&mut self.find_paths_between(&source_index, &sink_index));
+                    paths.append(&mut self.find_paths_between(source_index, sink_index));
                 }
             }
 
