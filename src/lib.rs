@@ -336,46 +336,43 @@ pub mod circuit_graph {
         /// of the circuit.
         pub fn find_paths(&self) -> Vec<(NodeIndex, Vec<EdgeIndex>)> {
             let source_indices: Vec<NodeIndex> = self.graph.externals(Incoming).collect();
-            let sink_indices: Vec<NodeIndex> = self.graph.externals(Outgoing).collect();
 
             let mut paths: Vec<(NodeIndex, Vec<EdgeIndex>)> = Vec::new();
 
             for source_index in &source_indices {
-                for sink_index in &sink_indices {
-                    paths.append(&mut self.find_paths_between(source_index, sink_index));
-                }
+                paths.append(&mut self.find_paths_from(source_index));
             }
 
             paths
         }
 
-        /// Finds, as sequences of edges, all the paths between a given source and sink node
-        /// using a modified depth-first search.
+        /// Finds, as sequences of edges, all the paths between a given source node and
+        /// any connected sink nodes using a modified depth-first search.
         /// Also returns the source node as a convenience.
-        fn find_paths_between(
-            &self,
-            source_index: &NodeIndex,
-            sink_index: &NodeIndex,
-        ) -> Vec<(NodeIndex, Vec<EdgeIndex>)> {
+        fn find_paths_from(&self, source_index: &NodeIndex) -> Vec<(NodeIndex, Vec<EdgeIndex>)> {
             let mut paths: Vec<(NodeIndex, Vec<EdgeIndex>)> = Vec::new();
             let mut visited_edges: Vec<EdgeIndex> = Vec::new();
             let mut visited_nodes: Vec<NodeIndex> = Vec::new();
 
             let mut stack = vec![self.graph.edges_directed(*source_index, Outgoing)];
 
-            if source_index == sink_index {
-                return paths;
-            }
-
             while !stack.is_empty() {
                 // Will never error since we know stack isn't empty
                 let edge_iter = stack.last_mut().unwrap();
                 match edge_iter.next() {
                     Some(next_edge) => {
-                        if next_edge.target() == *sink_index {
+                        // Record this path if we've landed at any sink
+                        if self
+                            .graph
+                            .node_weight(next_edge.target())
+                            .unwrap()
+                            .vertex_type
+                            == VertexType::Sink
+                        {
                             let mut new_path = visited_edges.clone();
                             new_path.push(next_edge.id());
                             paths.push((source_index.clone(), new_path));
+                        // Otherwise keep traversing
                         } else if !visited_nodes.contains(&next_edge.target()) {
                             visited_edges.push(next_edge.id());
                             visited_nodes.push(next_edge.source());
