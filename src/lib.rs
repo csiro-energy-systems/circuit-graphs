@@ -24,10 +24,7 @@ pub mod circuit_graph {
         ///
         /// [internal]: `VertexType::Internal`
         pub fn is_internal(&self) -> bool {
-            match self {
-                Self::Internal => true,
-                _ => false,
-            }
+            matches!(self, Self::Internal)
         }
 
         /// Returns whether this [`VertexType`] is of the [`Source`][source]
@@ -35,10 +32,7 @@ pub mod circuit_graph {
         ///
         /// [source]: `VertexType::Source`
         pub fn is_source(&self) -> bool {
-            match self {
-                Self::Source => true,
-                _ => false,
-            }
+            matches!(self, Self::Source)
         }
 
         /// Returns whether this [`VertexType`] is of the [`Sink`][sink]
@@ -46,10 +40,7 @@ pub mod circuit_graph {
         ///
         /// [sink]: `VertexType::Sink`
         pub fn is_sink(&self) -> bool {
-            match self {
-                Self::Sink => true,
-                _ => false,
-            }
+            matches!(self, Self::Sink)
         }
 
         /// Returns wether this [`VertexType`] is of the [`TransformerSecondary`][secondary]
@@ -57,10 +48,7 @@ pub mod circuit_graph {
         ///
         /// [secondary]: `VertexType::TransformerSecondary`
         pub fn is_transformer_secondary(&self) -> bool {
-            match self {
-                Self::TransformerSecondary => true,
-                _ => false,
-            }
+            matches!(self, Self::TransformerSecondary)
         }
     }
 
@@ -91,7 +79,7 @@ pub mod circuit_graph {
                     power: None,
                 },
                 VertexType::Sink { .. } | VertexType::Source { .. } => {
-                    assert!(!voltage.is_none());
+                    assert!(voltage.is_some());
                     Self {
                         voltage,
                         tag,
@@ -191,20 +179,14 @@ pub mod circuit_graph {
         ///
         /// [transformer]: `EdgeType::Transformer`
         pub fn is_transformer(&self) -> bool {
-            match self.edge_type {
-                EdgeType::Transformer { .. } => true,
-                _ => false,
-            }
+            matches!(self.edge_type, EdgeType::Transformer { .. })
         }
 
         /// Returns true iff this edge is a [`PassiveComponent`][component] edge.
         ///
         /// [component]: `EdgeType::PassiveComponent`
         pub fn is_passive_component(&self) -> bool {
-            match self.edge_type {
-                EdgeType::PassiveComponent { .. } => true,
-                _ => false,
-            }
+            matches!(self.edge_type, EdgeType::PassiveComponent { .. })
         }
     }
 
@@ -371,7 +353,7 @@ pub mod circuit_graph {
                         {
                             let mut new_path = visited_edges.clone();
                             new_path.push(next_edge.id());
-                            paths.push((source_index.clone(), new_path));
+                            paths.push((*source_index, new_path));
                         // Otherwise keep traversing
                         } else if !visited_nodes.contains(&next_edge.target()) {
                             visited_edges.push(next_edge.id());
