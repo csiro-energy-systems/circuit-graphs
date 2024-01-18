@@ -2,7 +2,7 @@ pub mod circuit_graph {
     use std::collections::HashMap;
 
     use faer::prelude::SpSolver;
-    use faer::solvers::Svd;
+    use faer::solvers::Qr;
     use faer::{Col, Mat};
     use faer_entity::ComplexField;
     use petgraph::algo;
@@ -694,7 +694,7 @@ pub mod circuit_graph {
             }
 
             // Solve the system of equations
-            let solver = Svd::new(coeffs.as_ref());
+            let solver = Qr::new(coeffs.as_ref());
             solver.solve_in_place(column.as_mut().as_2d_mut());
             column.resize_with(num_unknown_currents + num_nodes, |_| T::faer_zero());
 
