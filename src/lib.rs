@@ -99,6 +99,7 @@ pub mod circuit_graph {
             tag: u32,
             num_primary_coils: u32,
             num_secondary_coils: u32,
+            node_index: Option<NodeIndex>,
         },
     }
 
@@ -114,6 +115,7 @@ pub mod circuit_graph {
                 tag,
                 num_primary_coils,
                 num_secondary_coils,
+                node_index: None,
             }
         }
     }
@@ -213,7 +215,7 @@ pub mod circuit_graph {
         /// # Panics
         /// This constructor will panic if an edge's `tail` or `head` refers to a
         /// non-existant node.
-        pub fn new(vertices: Vec<VertexMetadata<T>>, edges: Vec<EdgeMetadata<T>>) -> Self {
+        pub fn new(vertices: Vec<VertexMetadata<T>>, mut edges: Vec<EdgeMetadata<T>>) -> Self {
             let mut graph: DiGraph<VertexMetadata<T>, EdgeMetadata<T>> = DiGraph::new();
 
             let mut vertex_indices: HashMap<u32, NodeIndex> = HashMap::new();
@@ -222,6 +224,25 @@ pub mod circuit_graph {
                 let tag = vertex.tag;
                 let node_index = graph.add_node(vertex);
                 vertex_indices.insert(tag, node_index);
+            }
+
+            for edge in edges.iter_mut() {
+                match edge.edge_type {
+                    EdgeType::Transformer {
+                        tag,
+                        num_primary_coils,
+                        num_secondary_coils,
+                        node_index: _,
+                    } => {
+                        edge.edge_type = EdgeType::Transformer {
+                            tag,
+                            num_primary_coils,
+                            num_secondary_coils,
+                            node_index: vertex_indices.get(&tag).copied(),
+                        };
+                    }
+                    _ => {}
+                }
             }
 
             for edge in edges {
@@ -491,20 +512,14 @@ pub mod circuit_graph {
                             coeffs.write(i, current_index, admittance.faer_inv() + present_value);
                         }
                         EdgeType::Transformer {
-                            tag,
+                            tag: _,
                             num_primary_coils,
                             num_secondary_coils,
+                            node_index,
                         } => {
-                            let secondary_node_index = self
-                                .graph
-                                .node_indices()
-                                .find(|index| self.graph.node_weight(*index).unwrap().tag == tag)
-                                .unwrap()
-                                .index();
-
                             coeffs.write(
                                 i,
-                                num_unknown_currents + secondary_node_index,
+                                num_unknown_currents + node_index.unwrap().index(),
                                 Self::get_coil_ratio(num_primary_coils, num_secondary_coils),
                             );
                         }
@@ -550,19 +565,14 @@ pub mod circuit_graph {
                 // We set that difference equal to the node's voltage times the winding ratio.
                 match edge_ref.weight().edge_type {
                     EdgeType::Transformer {
-                        tag,
+                        tag: _,
                         num_primary_coils,
                         num_secondary_coils,
+                        node_index,
                     } => {
-                        let secondary_index = self
-                            .graph
-                            .node_indices()
-                            .find(|index| self.graph.node_weight(*index).unwrap().tag == tag)
-                            .unwrap();
-
                         coeffs.write(
                             i,
-                            num_unknown_currents + secondary_index.index(),
+                            num_unknown_currents + node_index.unwrap().index(),
                             Self::get_coil_ratio(num_primary_coils, num_secondary_coils).faer_neg(),
                         );
                     }
@@ -589,17 +599,16 @@ pub mod circuit_graph {
                 }
 
                 // Find the edge and take its current times the winding ratio.
-                let node_tag = self.graph.node_weight(node_index).unwrap().tag;
-
                 let transformer_edge = self
                     .graph
                     .edge_weights()
                     .find(|weight| match weight.edge_type {
                         EdgeType::Transformer {
-                            tag,
+                            tag: _,
                             num_primary_coils: _,
                             num_secondary_coils: _,
-                        } => tag == node_tag,
+                            node_index: edge_node_index,
+                        } => edge_node_index.unwrap() == node_index,
                         _ => false,
                     })
                     .unwrap();
@@ -609,6 +618,7 @@ pub mod circuit_graph {
                         tag: _,
                         num_primary_coils,
                         num_secondary_coils,
+                        node_index: _,
                     } => Self::get_coil_ratio(num_primary_coils, num_secondary_coils),
                     _ => {
                         panic!("Expected transformer edge");
@@ -650,7 +660,7 @@ pub mod circuit_graph {
                 );
 
                 // As before, a passive component's voltage drop is its impedance times the
-                // current, and a transforer's is the voltage at the secondary node times the
+                // current, and a transformer's is the voltage at the secondary node times the
                 // winding ratio.
                 match edge_ref.weight().edge_type {
                     EdgeType::PassiveComponent { admittance } => {
@@ -661,13 +671,14 @@ pub mod circuit_graph {
                         );
                     }
                     EdgeType::Transformer {
-                        tag,
+                        tag: _,
                         num_primary_coils,
                         num_secondary_coils,
+                        node_index,
                     } => {
                         coeffs.write(
                             i,
-                            num_unknown_currents + (tag as usize),
+                            num_unknown_currents + node_index.unwrap().index(),
                             Self::get_coil_ratio(num_primary_coils, num_secondary_coils).faer_neg(),
                         );
                     }
