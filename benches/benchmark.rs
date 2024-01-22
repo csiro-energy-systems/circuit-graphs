@@ -1,4 +1,5 @@
 use circuit_graphs::circuit_graph::*;
+use criterion::BenchmarkId;
 use criterion::{criterion_group, criterion_main, Criterion};
 use faer_core::c64;
 use faer_core::ComplexField;
@@ -153,5 +154,44 @@ pub fn solve_series_transformer(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, solve_ac, solve_transformer, solve_series_transformer);
+fn create_nested_transformer_circuit(num: u32) -> Circuit<f64> {
+    let primary_source = VertexMetadata::new(Some(24.0), 1, VertexType::Source);
+    let sink = VertexMetadata::new(Some(0.0), 0, VertexType::Sink);
+
+    let mut nodes = vec![primary_source, sink];
+    let mut edges = vec![];
+
+    for i in 2..(num + 1) {
+        let new_node = VertexMetadata::new(None, i, VertexType::TransformerSecondary);
+        let new_edge = EdgeMetadata::new(i - 1, 0, EdgeType::new_transformer(i, 1, 2));
+
+        nodes.push(new_node);
+        edges.push(new_edge);
+    }
+
+    edges.push(EdgeMetadata::new(num, 0, EdgeType::new_component(2.0)));
+
+    Circuit::new(nodes, edges)
+}
+
+pub fn solve_nested_transformer(c: &mut Criterion) {
+    let mut group = c.benchmark_group("nested_transformers");
+    for num in [1, 2, 4, 10, 20, 50, 100].iter() {
+        group.bench_with_input(BenchmarkId::from_parameter(num), num, |b, &num| {
+            b.iter_batched(
+                || create_nested_transformer_circuit(num),
+                |mut circuit| circuit.solve_currents_and_voltages(),
+                criterion::BatchSize::SmallInput,
+            )
+        });
+    }
+}
+
+criterion_group!(
+    benches,
+    solve_ac,
+    solve_transformer,
+    solve_series_transformer,
+    solve_nested_transformer,
+);
 criterion_main!(benches);
