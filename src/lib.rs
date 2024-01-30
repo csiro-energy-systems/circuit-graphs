@@ -215,7 +215,10 @@ pub mod circuit_graph {
         /// # Panics
         /// This constructor will panic if an edge's `tail` or `head` refers to a
         /// non-existant node.
-        pub fn new(vertices: Vec<VertexMetadata<T>>, mut edges: Vec<EdgeMetadata<T>>) -> Self {
+        pub fn new(
+            vertices: impl IntoIterator<Item = VertexMetadata<T>>,
+            edges: impl IntoIterator<Item = EdgeMetadata<T>>,
+        ) -> Self {
             let mut graph: DiGraph<VertexMetadata<T>, EdgeMetadata<T>> = DiGraph::new();
 
             let mut vertex_indices: HashMap<u32, NodeIndex> = HashMap::new();
@@ -226,26 +229,22 @@ pub mod circuit_graph {
                 vertex_indices.insert(tag, node_index);
             }
 
-            for edge in edges.iter_mut() {
-                match edge.edge_type {
-                    EdgeType::Transformer {
+            for mut edge in edges {
+                if let EdgeType::Transformer {
+                    tag,
+                    num_primary_coils,
+                    num_secondary_coils,
+                    node_index: _,
+                } = edge.edge_type
+                {
+                    edge.edge_type = EdgeType::Transformer {
                         tag,
                         num_primary_coils,
                         num_secondary_coils,
-                        node_index: _,
-                    } => {
-                        edge.edge_type = EdgeType::Transformer {
-                            tag,
-                            num_primary_coils,
-                            num_secondary_coils,
-                            node_index: vertex_indices.get(&tag).copied(),
-                        };
-                    }
-                    _ => {}
+                        node_index: vertex_indices.get(&tag).copied(),
+                    };
                 }
-            }
 
-            for edge in edges {
                 graph.add_edge(
                     *vertex_indices.get(&edge.tail).unwrap(),
                     *vertex_indices.get(&edge.head).unwrap(),
