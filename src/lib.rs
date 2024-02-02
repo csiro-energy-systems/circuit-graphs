@@ -4,7 +4,8 @@ pub mod circuit_graph {
     use faer::prelude::SpSolver;
     use faer::solvers::Qr;
     use faer::{Col, Mat};
-    use faer_entity::ComplexField;
+    use faer_core::sparse::{SparseRowMatRef, SymbolicSparseRowMatRef};
+    use faer_entity::{ComplexField, Entity, IdentityGroup};
     use petgraph::algo;
     use petgraph::graph::EdgeReference;
     use petgraph::prelude::*;
@@ -397,7 +398,8 @@ pub mod circuit_graph {
             T: ComplexField
                 + std::ops::Add<Output = T>
                 + std::ops::Sub<Output = T>
-                + std::ops::Mul<Output = T>,
+                + std::ops::Mul<Output = T>
+                + Entity<Group = IdentityGroup>,
         > Circuit<T>
     {
         /// Returns the ratio of primary to secondary coils in a transformer winding
@@ -468,6 +470,18 @@ pub mod circuit_graph {
             let paths = self.find_paths();
             let num_paths = paths.len();
 
+            println!("{} paths", num_paths);
+            println!(
+                "{}",
+                num_paths
+                    + num_bus_nodes
+                    + num_transformer_edges
+                    + num_transformer_nodes
+                    + num_internal_nodes
+                    + num_source_sink_nodes
+            );
+            println!("{}", num_unknown_currents + num_nodes);
+
             // The coefficient matrix for the system of equations
             let mut coeffs: Mat<T> = Mat::zeros(
                 num_paths
@@ -478,6 +492,22 @@ pub mod circuit_graph {
                     + num_source_sink_nodes,
                 num_unknown_currents + num_nodes,
             );
+
+            let nrows = num_paths
+                + num_bus_nodes
+                + num_transformer_edges
+                + num_transformer_nodes
+                + num_internal_nodes
+                + num_source_sink_nodes;
+            let ncols = num_unknown_currents + num_nodes;
+            let zero_vec = (0..nrows).map(|_| 0usize).collect::<Vec<_>>();
+            let row_ptrs = zero_vec.as_slice();
+            let col_indices: &[usize] = &[];
+            let data: &[f64] = &[];
+
+            let mut sym =
+                SymbolicSparseRowMatRef::new_checked(nrows, ncols, row_ptrs, None, col_indices);
+            let mut arr: SparseRowMatRef<_, f64> = SparseRowMatRef::new(sym, data);
             // The column vector of RHS values for the system of equations
             let mut column: Col<T> = Col::zeros(
                 num_paths
