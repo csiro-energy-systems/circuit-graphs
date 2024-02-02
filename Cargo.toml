@@ -10,9 +10,11 @@ petgraph = "0.6.2"
 faer = "0.16.0"
 faer-entity = "0.16.0"
 faer-core = "0.16.0"
+polars = {version = "0.37.0", features = ["parquet"]}
 
 [dev-dependencies]
 criterion = {version = "0.3", features = ["html_reports"]}
+polars = {version = "0.37.0", features = ["parquet"]}
 
 [[bench]]
 name = "benchmark"
