@@ -8,7 +8,8 @@ node relative to a sink node, and the power drawn by each component.
 
 Circuits can consist of passive components with arbitrary impedance, which are
 represented by the edges, and (ideal) transformers, which take an edge as the
-primary side and a node as the source for the secondary side.
+primary side and a node as the source for the secondary side. Voltage sources
+are represented with a source vertex, and a sink vertex must also be chosen.
 
 Features to come include:
 
@@ -29,7 +30,7 @@ Let us create the following circuit:
    └──────────┴───────────┘
 ```
 
-We begin by choosing the reference vertx to be that at the bottom of the circuit
+We begin by choosing the reference vertex to be that at the bottom of the circuit
 diagram. Vertices have been labelled with a `u32` index for clarity, but the 
 values are unimportant:
 ```script
