@@ -2,12 +2,18 @@
 
 This project is a passive circuit analysis tool using a graph representation
 (the [discrete maths kind][graphs], not the chart/plot kind). At present, it is
-possible to create a circuit from a set of vertices and edges, where every edge
-represents a resistor, and then solve for the current along every edge and
-voltage at every vertex. Features to come include:
+possible to create a circuit from a set of vertices and edges, and then solve
+for the current through and voltage drop across each edge, the voltage at each
+node relative to a sink node, and the power drawn by each component.
 
-* AC voltage/current support
-* Support for capacitors/inductors (generalised impedance)
+Circuits can consist of passive components with arbitrary impedance, which are
+represented by the edges, and (ideal) transformers, which take an edge as the
+primary side and a node as the source for the secondary side.
+
+Features to come include:
+
+* Sparse matrix backend for large circuits
+* Benchmark using the [IEEE 118-bus system][ieee_118]
 * *(potential)* Python integration
 
 ## Usage Example
@@ -17,21 +23,21 @@ Let us create the following circuit:
    ┌──═════───┬────═════──┐
    │    1Ω    │    0.5Ω   │
    │+         ║           ║ 
-2V ◯      1Ω ║        2Ω ║
+2V ◯       1Ω ║        2Ω ║
    │-         ║           ║
    │          │           │
    └──────────┴───────────┘
 ```
 
 We begin by choosing the reference vertx to be that at the bottom of the circuit
-diagram. Vertices have been labelled with an index for clarity, but the values
-are unimportant:
+diagram. Vertices have been labelled with a `u32` index for clarity, but the 
+values are unimportant:
 ```script
    0          1           2
    ┌──═════───┬────═════──┐
    │    1Ω    │    0.5Ω   │
    │+         ║           ║ 
-2V ◯      1Ω ║        2Ω ║
+2V ◯       1Ω ║        2Ω ║
    │-         ║           ║
    │          │           │
    └──────────┴───────────┘
@@ -72,3 +78,4 @@ let circuit = Circuit::new(
 ```
 
 [graphs]: <https://en.wikipedia.org/wiki/Graph_(discrete_mathematics)>
+[ieee_118]: <https://icseg.iti.illinois.edu/ieee-118-bus-system/>
