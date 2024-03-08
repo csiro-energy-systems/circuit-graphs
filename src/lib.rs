@@ -1830,8 +1830,6 @@ mod tests {
     ///   └───────────────────┴────────┘   
     /// ```
     fn create_current_source_circuit() {
-        // Note that source0 represents the node at the very top left of the circuit,
-        // and thus has the combined voltage of both the circuit's voltage sources.
         let source = VertexMetadata::new(None, 0, VertexType::CurrentSource);
 
         let v0 = VertexMetadata::new(None, 1, VertexType::Internal);
