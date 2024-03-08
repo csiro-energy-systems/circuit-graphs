@@ -1,18 +1,17 @@
 pub mod circuit_graph {
     use std::collections::HashMap;
 
-    use faer::prelude::SpSolver;
-    use faer::solvers::Qr;
-    use faer::{Col, Mat};
-    use faer_entity::ComplexField;
+    use faer::prelude::*;
+    use faer::ComplexField;
     use petgraph::algo;
     use petgraph::graph::EdgeReference;
     use petgraph::prelude::*;
     use petgraph::visit::{EdgeRef, IntoNodeReferences};
 
-    #[derive(PartialEq, Eq)]
+    #[derive(PartialEq, Eq, Debug)]
     pub enum VertexType {
-        Source,
+        CurrentSource,
+        VoltageSource,
         Sink,
         Internal,
         TransformerSecondary,
@@ -27,12 +26,20 @@ pub mod circuit_graph {
             matches!(self, Self::Internal)
         }
 
-        /// Returns whether this [`VertexType`] is of the [`Source`][source]
+        /// Returns whether this [`VertexType`] is of the [`VoltageSource`][source]
         /// variant.
         ///
-        /// [source]: `VertexType::Source`
-        pub fn is_source(&self) -> bool {
-            matches!(self, Self::Source)
+        /// [source]: `VertexType::VoltageSource`
+        pub fn is_voltage_source(&self) -> bool {
+            matches!(self, Self::VoltageSource)
+        }
+
+        /// Returns whether this [`VertexType`] is of the [`CurrentSource`][source]
+        /// variant.
+        ///
+        /// [source]: `VertexType::CurrentSource`
+        pub fn is_current_source(&self) -> bool {
+            matches!(self, Self::CurrentSource)
         }
 
         /// Returns whether this [`VertexType`] is of the [`Sink`][sink]
@@ -52,6 +59,7 @@ pub mod circuit_graph {
         }
     }
 
+    #[derive(Debug)]
     pub struct VertexMetadata<T> {
         pub voltage: Option<T>,
         pub tag: u32,
@@ -60,38 +68,46 @@ pub mod circuit_graph {
     }
 
     impl<T> VertexMetadata<T> {
-        /// Construct a new [`VertexMetadata`]. This constructor guarantees that a
-        /// source or sink node will have a voltage associated, and that internal nodes
-        /// will have [`None`] instead.
+        /// Construct a new [`VertexMetadata`]. This constructor guarantees that:
+        /// * vertex type [`VoltageSource`][v_source] has a voltage associated.
+        /// * vertex type [`Sink`][sink] has a voltage associated.
+        /// * vertex type [`CurrentSource`][c_source] has voltage [`None`]
+        /// * vertex type [`Internal`][internal] has voltage [`None`]
+        /// * vertex type [`TransformerSecondary`][secondary] has voltage [`None`]
         ///
         /// # Panics
-        /// This constructor panics if the given voltage is [`None`] and the
-        /// vertex_type is [`Sink`][sink] or [`Source`][source]
+        /// This constructor panics if the given voltage does not match this pattern.
         ///
+        /// [v_source]: `VertexType::VoltageSource`
         /// [sink]: `VertexType::Sink`
-        /// [source]: `VertexType::Source`
+        /// [c_source]: `VertexType::CurrentSource`
+        /// [internal]: `VertexType::Internal`
+        /// [secondary]: `VertexType::TransformerSecondary`
         pub fn new(voltage: Option<T>, tag: u32, vertex_type: VertexType) -> Self {
             match vertex_type {
-                VertexType::Internal { .. } | VertexType::TransformerSecondary { .. } => Self {
-                    voltage: None,
-                    tag,
-                    vertex_type,
-                    power: None,
-                },
-                VertexType::Sink { .. } | VertexType::Source { .. } => {
-                    assert!(voltage.is_some());
-                    Self {
-                        voltage,
-                        tag,
-                        vertex_type,
-                        power: None,
-                    }
+                VertexType::CurrentSource { .. }
+                | VertexType::Internal { .. }
+                | VertexType::TransformerSecondary { .. } => {
+                    assert!(voltage.is_none());
                 }
+                VertexType::Sink { .. } | VertexType::VoltageSource { .. } => {
+                    assert!(voltage.is_some());
+                }
+            }
+            Self {
+                voltage,
+                tag,
+                vertex_type,
+                power: None,
             }
         }
     }
 
+    #[derive(Debug)]
     pub enum EdgeType<T> {
+        FromCurrentSource {
+            current: T,
+        },
         PassiveComponent {
             admittance: T,
         },
@@ -107,6 +123,11 @@ pub mod circuit_graph {
         /// Construct a new Component.
         pub fn new_component(admittance: T) -> Self {
             Self::PassiveComponent { admittance }
+        }
+
+        /// Enable a new new Current Source
+        pub fn new_current_source(current: T) -> Self {
+            Self::FromCurrentSource { current }
         }
 
         /// Construct a new Transformer.
@@ -131,12 +152,13 @@ pub mod circuit_graph {
     /// - `B` is susceptance (real-valued), and
     /// - `j` is the imaginary unit.
     ///
-    /// In particular, the `c64` or `c32` types from `faer` are recommended for
-    /// best performance.
+    /// In particular, the `faer::complex_native::c64` or `faer::complex_naitive::c32`
+    /// types are recommended for  best performance.
     ///
     /// Edges may in particular represent the primary side of a transformer.
     /// Transformers are taken to be ideal in the current implementation, and do
     /// not take an admittance value.
+    #[derive(Debug)]
     pub struct EdgeMetadata<T> {
         pub tail: u32,
         pub head: u32,
@@ -146,17 +168,21 @@ pub mod circuit_graph {
         edge_type: EdgeType<T>,
     }
 
-    impl<T> EdgeMetadata<T> {
+    impl<T: Copy> EdgeMetadata<T> {
         /// Constructs a new [`EdgeMetadata`] with the provided tail and head indices
-        /// and admittance.
+        /// and admittance if applicable.
         ///
         /// See the [`EdgeMetadata`] documentation for details on admittance values.
         pub fn new(tail: u32, head: u32, edge_type: EdgeType<T>) -> Self {
+            let current = match edge_type {
+                EdgeType::FromCurrentSource { current } => Some(current),
+                _ => None,
+            };
             Self {
                 tail,
                 head,
                 current_id: None,
-                current: None,
+                current,
                 power: None,
                 edge_type,
             }
@@ -165,14 +191,19 @@ pub mod circuit_graph {
         /// Finds the admittance of an edge.
         ///
         /// # Panics
-        /// Will panic if called on a [`Transformer`][transformer] edge.
+        /// Will panic if called on a [`Transformer`][transformer] edge or the
+        /// outgoing edge from a [`CurrentSource`][curent_source] vertex.
         ///
         /// [transformer]: `EdgeType::Transformer`
+        /// [current_source]: `EdgeType::FromCurrentSource`
         pub fn get_admittance(&self) -> &T {
             match &self.edge_type {
                 EdgeType::PassiveComponent { admittance } => admittance,
                 EdgeType::Transformer { .. } => {
                     panic!("Attempted to get admittance of a transformer edge");
+                }
+                EdgeType::FromCurrentSource { .. } => {
+                    panic!("Attempted to get admittance for a current source");
                 }
             }
         }
@@ -190,6 +221,14 @@ pub mod circuit_graph {
         pub fn is_passive_component(&self) -> bool {
             matches!(self.edge_type, EdgeType::PassiveComponent { .. })
         }
+
+        /// Returns true iff this edge is an outgoing edge from a
+        /// [`VertexType`][current_source] vertex.
+        ///
+        /// [current_source]: `VertexType::CurrentSource`
+        pub fn is_from_current_source(&self) -> bool {
+            matches!(self.edge_type, EdgeType::FromCurrentSource { .. })
+        }
     }
 
     /// A struct representing a passive circuit. It relies on a flow graph where
@@ -205,11 +244,12 @@ pub mod circuit_graph {
     /// will work also for DC circuits or, in theory, purely resistive circuits.
     /// Complex admittance values should be in `G + jB` format; see the
     /// [`EdgeMetadata`] documentation for details.
+    #[derive(Debug)]
     pub struct Circuit<T> {
         pub graph: DiGraph<VertexMetadata<T>, EdgeMetadata<T>>,
     }
 
-    impl<T> Circuit<T> {
+    impl<T: Copy> Circuit<T> {
         /// Create a new circuit from a collection of vertices and edges.
         ///
         /// # Panics
@@ -245,6 +285,18 @@ pub mod circuit_graph {
                     };
                 }
 
+                // current sources must only have a single outgoing edge
+                // or everything burns
+                if edge.is_from_current_source() {
+                    assert!(graph
+                        .edges_directed(
+                            *vertex_indices.get(&edge.tail).unwrap(),
+                            Direction::Outgoing
+                        )
+                        .count()
+                        .eq(&0));
+                }
+
                 graph.add_edge(
                     *vertex_indices.get(&edge.tail).unwrap(),
                     *vertex_indices.get(&edge.head).unwrap(),
@@ -258,8 +310,8 @@ pub mod circuit_graph {
         /// Find and label sets of edges which are in series. Returns the number of
         /// distinct currents which need to be found in the circuit.
         pub fn determine_unknown_currents(&mut self) -> usize {
-            // This method uses the fact that every edge of the graph corresponds to a
-            // component whose current we want to find, but that components in series (which
+            // This method uses the fact that almost every edge of the graph corresponds to a
+            // component whose current we want to find, but components in series (which
             // can be uniquely associated with vertices having deg_in = deg_out = 1)
             // need to be uncounted since any group all share the same current. Such nodes
             // are found here:
@@ -274,7 +326,10 @@ pub mod circuit_graph {
 
             let mut next_current_index: usize = 0;
 
-            // Match up series nodes to all have the same current indices.
+            // Match up series nodes to all have the same current indices; note
+            // that some fiddling about is done here if the series_node set
+            // originates from a VertexType::CurrentSource vertex, since this
+            // means that the current through this set is known.
             for node_index in &series_nodes {
                 // Note we know these edges exist since we just grabbed them from the graph, so
                 // all the unwrap calls in this for block are safe.
@@ -292,34 +347,47 @@ pub mod circuit_graph {
                     .unwrap()
                     .id();
 
-                if let Some(id) = incoming_edge_ref.weight().current_id {
-                    let outgoing_weight = self.graph.edge_weight_mut(outgoing_edge_index).unwrap();
-                    outgoing_weight.current_id = Some(id);
-                // It's not possible that just the outgoing edge has its current_id set,
-                // since we're doing them in topological sort order. Thus the only other
-                // possibility is that both haven't been set.
-                } else {
-                    let incoming_weight =
-                        self.graph.edge_weight_mut(incoming_edge_ref.id()).unwrap();
-                    incoming_weight.current_id = Some(next_current_index);
+                match incoming_edge_ref.weight().current_id {
+                    Some(id) => {
+                        let outgoing_weight =
+                            self.graph.edge_weight_mut(outgoing_edge_index).unwrap();
 
-                    let outgoing_weight = self.graph.edge_weight_mut(outgoing_edge_index).unwrap();
-                    outgoing_weight.current_id = Some(next_current_index);
+                        outgoing_weight.current_id = Some(id);
+                    }
+                    // It's not possible that just the outgoing edge has its current_id set,
+                    // since we're doing them in topological sort order. Thus the only other
+                    // possibility is that both haven't been set.
+                    None => {
+                        let incoming_weight =
+                            self.graph.edge_weight_mut(incoming_edge_ref.id()).unwrap();
+                        incoming_weight.current_id = Some(next_current_index);
 
-                    next_current_index += 1;
-                }
+                        let outgoing_weight =
+                            self.graph.edge_weight_mut(outgoing_edge_index).unwrap();
+                        outgoing_weight.current_id = Some(next_current_index);
+
+                        next_current_index += 1;
+                    }
+                };
             }
 
             // Now that all the series pairs have been added, label every other edge in
             // increasing order.
+            let mut current_sources: usize = 0;
             for edge_weight in self.graph.edge_weights_mut() {
-                if edge_weight.current_id.is_none() {
-                    edge_weight.current_id = Some(next_current_index);
-                    next_current_index += 1;
+                match (edge_weight.current_id, edge_weight.current) {
+                    (None, None) => {
+                        edge_weight.current_id = Some(next_current_index);
+                        next_current_index += 1
+                    }
+                    (_, Some(_)) => {
+                        current_sources += 1;
+                    }
+                    _ => (),
                 }
             }
 
-            self.graph.edge_count() - series_nodes.len()
+            self.graph.edge_count() - series_nodes.len() - current_sources
         }
 
         /// Count the number of unknown voltages that need to be found when solving.
@@ -415,12 +483,12 @@ pub mod circuit_graph {
             let num_unknown_currents = self.determine_unknown_currents();
             let num_nodes = self.graph.node_count();
 
-            // Find all the either source or sink nodes
+            // Find all nodes that are either voltage-source or sink
             let source_sink_node_refs: Vec<(NodeIndex, &VertexMetadata<T>)> = self
                 .graph
                 .node_references()
                 .filter(|(_, weight)| {
-                    weight.vertex_type.is_source() || weight.vertex_type.is_sink()
+                    weight.vertex_type.is_voltage_source() || weight.vertex_type.is_sink()
                 })
                 .collect();
             let num_source_sink_nodes = source_sink_node_refs.len();
@@ -492,23 +560,34 @@ pub mod circuit_graph {
             // path. (KVL)
             for (i, path) in paths.iter().enumerate() {
                 // Write -1 for the coefficient of the source voltage
-                coeffs.write(
-                    i,
-                    num_unknown_currents + path.0.index(),
-                    T::faer_one().faer_neg(),
-                );
+                unsafe {
+                    coeffs.write_unchecked(
+                        i,
+                        num_unknown_currents + path.0.index(),
+                        T::faer_one().faer_neg(),
+                    );
+                };
 
-                // A passive component will contribute its impedance times its current to the
-                // equation.
-                // A transformer will contribute its secondary voltage times its winding ratio.
+                // * A passive component will contribute its impedance times
+                //   its current to the equation.
+                // * A transformer will contribute its secondary voltage times
+                //   its winding ratio.
+                // * An outgoing edge from a current source will have a known
+                //   current value and is thus censored from KVL.
                 for edge_index in &path.1 {
                     let edge = self.graph.edge_weight(*edge_index).unwrap();
                     match edge.edge_type {
                         EdgeType::PassiveComponent { admittance } => {
                             let current_index = edge.current_id.unwrap();
                             // Add on this edge's contribution to what's there, it might be in series
-                            let present_value = coeffs.read(i, current_index);
-                            coeffs.write(i, current_index, admittance.faer_inv() + present_value);
+                            unsafe {
+                                let present_value = coeffs.read(i, current_index);
+                                coeffs.write_unchecked(
+                                    i,
+                                    current_index,
+                                    admittance.faer_inv() + present_value,
+                                );
+                            };
                         }
                         EdgeType::Transformer {
                             tag: _,
@@ -516,12 +595,15 @@ pub mod circuit_graph {
                             num_secondary_coils,
                             node_index,
                         } => {
-                            coeffs.write(
-                                i,
-                                num_unknown_currents + node_index.unwrap().index(),
-                                Self::get_coil_ratio(num_primary_coils, num_secondary_coils),
-                            );
+                            unsafe {
+                                coeffs.write_unchecked(
+                                    i,
+                                    num_unknown_currents + node_index.unwrap().index(),
+                                    Self::get_coil_ratio(num_primary_coils, num_secondary_coils),
+                                );
+                            };
                         }
+                        EdgeType::FromCurrentSource { .. } => (),
                     }
                 }
             }
@@ -531,13 +613,27 @@ pub mod circuit_graph {
             for (i, node_index) in (num_paths..(num_paths + num_bus_nodes)).zip(bus_indices) {
                 // Place a +1 coefficient on each incoming current
                 for edge_ref in self.graph.edges_directed(node_index, Incoming) {
-                    let current_index = edge_ref.weight().current_id.unwrap();
-                    coeffs.write(i, current_index, T::faer_one());
+                    if let Some(current_index) = edge_ref.weight().current_id {
+                        unsafe {
+                            coeffs.write_unchecked(i, current_index, T::faer_one());
+                        };
+                    } else {
+                        // if there is an inflowing current with no tag, it must
+                        // be a current source by construction; record the vale
+                        // in the RHS value
+                        unsafe {
+                            column
+                                .write_unchecked(i, edge_ref.weight().current.unwrap().faer_neg());
+                        };
+                    };
                 }
                 // Place a -1 coefficient on each outgoing current
                 for edge_ref in self.graph.edges_directed(node_index, Outgoing) {
-                    let current_index = edge_ref.weight().current_id.unwrap();
-                    coeffs.write(i, current_index, T::faer_one().faer_neg());
+                    if let Some(current_index) = edge_ref.weight().current_id {
+                        unsafe {
+                            coeffs.write_unchecked(i, current_index, T::faer_one().faer_neg());
+                        };
+                    };
                 }
             }
 
@@ -550,16 +646,18 @@ pub mod circuit_graph {
                 .zip(transformer_edge_refs.iter())
             {
                 // Take the difference between the voltages at either end of the edge
-                coeffs.write(
-                    i,
-                    num_unknown_currents + edge_ref.source().index(),
-                    T::faer_one(),
-                );
-                coeffs.write(
-                    i,
-                    num_unknown_currents + edge_ref.target().index(),
-                    T::faer_one().faer_neg(),
-                );
+                unsafe {
+                    coeffs.write_unchecked(
+                        i,
+                        num_unknown_currents + edge_ref.source().index(),
+                        T::faer_one(),
+                    );
+                    coeffs.write_unchecked(
+                        i,
+                        num_unknown_currents + edge_ref.target().index(),
+                        T::faer_one().faer_neg(),
+                    );
+                };
 
                 // We set that difference equal to the node's voltage times the winding ratio.
                 match edge_ref.weight().edge_type {
@@ -569,11 +667,14 @@ pub mod circuit_graph {
                         num_secondary_coils,
                         node_index,
                     } => {
-                        coeffs.write(
-                            i,
-                            num_unknown_currents + node_index.unwrap().index(),
-                            Self::get_coil_ratio(num_primary_coils, num_secondary_coils).faer_neg(),
-                        );
+                        unsafe {
+                            coeffs.write_unchecked(
+                                i,
+                                num_unknown_currents + node_index.unwrap().index(),
+                                Self::get_coil_ratio(num_primary_coils, num_secondary_coils)
+                                    .faer_neg(),
+                            );
+                        };
                     }
                     _ => {
                         panic!(
@@ -594,7 +695,9 @@ pub mod circuit_graph {
             {
                 // Take every current leaving the node.
                 for edge in self.graph.edges_directed(node_index, Outgoing) {
-                    coeffs.write(i, edge.weight().current_id.unwrap(), T::faer_one());
+                    unsafe {
+                        coeffs.write_unchecked(i, edge.weight().current_id.unwrap(), T::faer_one());
+                    };
                 }
 
                 // Find the edge and take its current times the winding ratio.
@@ -623,7 +726,13 @@ pub mod circuit_graph {
                         panic!("Expected transformer edge");
                     }
                 };
-                coeffs.write(i, transformer_edge.current_id.unwrap(), ratio.faer_neg());
+                unsafe {
+                    coeffs.write_unchecked(
+                        i,
+                        transformer_edge.current_id.unwrap(),
+                        ratio.faer_neg(),
+                    );
+                };
             }
 
             // We need to provide information for the internal vertices' voltage
@@ -647,27 +756,35 @@ pub mod circuit_graph {
                     .unwrap();
 
                 // Take the difference between this node's voltage and the prior one's
-                coeffs.write(
-                    i,
-                    num_unknown_currents + edge_ref.source().index(),
-                    T::faer_one(),
-                );
-                coeffs.write(
-                    i,
-                    num_unknown_currents + node_index.index(),
-                    T::faer_one().faer_neg(),
-                );
+                unsafe {
+                    coeffs.write_unchecked(
+                        i,
+                        num_unknown_currents + edge_ref.source().index(),
+                        T::faer_one(),
+                    );
+                    coeffs.write_unchecked(
+                        i,
+                        num_unknown_currents + node_index.index(),
+                        T::faer_one().faer_neg(),
+                    );
+                };
 
-                // As before, a passive component's voltage drop is its impedance times the
-                // current, and a transformer's is the voltage at the secondary node times the
-                // winding ratio.
+                // As before:
+                // * a passive component's voltage drop is its impedance
+                //   times the current
+                // * a transformer's is the voltage at the secondary node
+                //   times the winding ratio
+                // * on the outgoing edge from a current source, voltage
+                //   drop is not defined and the edge is ignored.
                 match edge_ref.weight().edge_type {
                     EdgeType::PassiveComponent { admittance } => {
-                        coeffs.write(
-                            i,
-                            edge_ref.weight().current_id.unwrap(),
-                            admittance.faer_inv().faer_neg(),
-                        );
+                        unsafe {
+                            coeffs.write_unchecked(
+                                i,
+                                edge_ref.weight().current_id.unwrap(),
+                                admittance.faer_inv().faer_neg(),
+                            );
+                        };
                     }
                     EdgeType::Transformer {
                         tag: _,
@@ -675,12 +792,16 @@ pub mod circuit_graph {
                         num_secondary_coils,
                         node_index,
                     } => {
-                        coeffs.write(
-                            i,
-                            num_unknown_currents + node_index.unwrap().index(),
-                            Self::get_coil_ratio(num_primary_coils, num_secondary_coils).faer_neg(),
-                        );
+                        unsafe {
+                            coeffs.write_unchecked(
+                                i,
+                                num_unknown_currents + node_index.unwrap().index(),
+                                Self::get_coil_ratio(num_primary_coils, num_secondary_coils)
+                                    .faer_neg(),
+                            );
+                        };
                     }
+                    EdgeType::FromCurrentSource { .. } => (),
                 }
             }
 
@@ -699,24 +820,39 @@ pub mod circuit_graph {
                     + num_source_sink_nodes))
                 .zip(source_sink_node_refs)
             {
-                coeffs.write(i, num_unknown_currents + node_index.index(), T::faer_one());
-                column.write(i, node_weight.voltage.unwrap());
+                unsafe {
+                    coeffs.write_unchecked(
+                        i,
+                        num_unknown_currents + node_index.index(),
+                        T::faer_one(),
+                    );
+                    column.write_unchecked(i, node_weight.voltage.unwrap());
+                };
             }
 
             // Solve the system of equations
-            let solver = Qr::new(coeffs.as_ref());
-            solver.solve_in_place(column.as_mut().as_2d_mut());
+            let solver = coeffs.as_ref().qr();
+            solver.solve_lstsq_in_place(column.as_mut().as_2d_mut());
             column.resize_with(num_unknown_currents + num_nodes, |_| T::faer_zero());
 
             // Assign every edge its current
             for edge_weight in self.graph.edge_weights_mut() {
-                let current_id = edge_weight.current_id.unwrap();
-                edge_weight.current = Some(column.read(current_id));
+                if let Some(current_id) = edge_weight.current_id {
+                    edge_weight.current = Some(column.read(current_id));
+                }
             }
 
-            // Assign every node its voltage.
+            // Assign every node its voltage, unless it is a current source; the
+            // computed value at a current source is a side-effect of not including
+            // hacks in the construction process that in turn leads to nonsensical
+            // results for these nodes.
             for (i, node_weight) in self.graph.node_weights_mut().enumerate() {
-                node_weight.voltage = Some(column.read(num_unknown_currents + i));
+                match node_weight.vertex_type {
+                    VertexType::CurrentSource => (),
+                    _ => {
+                        node_weight.voltage = Some(column.read(num_unknown_currents + i));
+                    }
+                }
             }
         }
 
@@ -740,20 +876,21 @@ pub mod circuit_graph {
             let edge = self.graph.edge_weight(edge_index).unwrap();
 
             let power = match edge.edge_type {
-                EdgeType::PassiveComponent { admittance } => {
-                    edge.current.unwrap().faer_mul(edge.current.unwrap()) * admittance.faer_inv()
-                }
+                EdgeType::PassiveComponent { admittance } => Some(
+                    edge.current.unwrap().faer_mul(edge.current.unwrap()) * admittance.faer_inv(),
+                ),
                 EdgeType::Transformer { .. } => {
                     let (tail_index, head_index) = self.graph.edge_endpoints(edge_index).unwrap();
                     let tail_voltage = self.graph.node_weight(tail_index).unwrap().voltage.unwrap();
                     let head_voltage = self.graph.node_weight(head_index).unwrap().voltage.unwrap();
 
-                    edge.current.unwrap() * (tail_voltage - head_voltage)
+                    Some(edge.current.unwrap() * (tail_voltage - head_voltage))
                 }
+                EdgeType::FromCurrentSource { .. } => None,
             };
 
             let edge = self.graph.edge_weight_mut(edge_index).unwrap();
-            edge.power = Some(power);
+            edge.power = power;
         }
 
         /// Find the power available at any given node and store it on the
@@ -816,15 +953,15 @@ mod tests {
 
     use crate::circuit_graph::*;
 
-    use faer_core::c64;
-    use faer_entity::ComplexField;
+    use faer::complex_native::c64;
+    use faer::ComplexField;
 
     #[test]
     fn create_single_vertex() {
-        let v: VertexMetadata<f64> = VertexMetadata::new(Some(1f64), 0, VertexType::Source);
+        let v: VertexMetadata<f64> = VertexMetadata::new(Some(1f64), 0, VertexType::VoltageSource);
 
         assert!(v.voltage.unwrap() == 1f64);
-        assert!(v.vertex_type == VertexType::Source);
+        assert!(v.vertex_type == VertexType::VoltageSource);
     }
 
     #[test]
@@ -838,7 +975,7 @@ mod tests {
 
     #[test]
     fn create_graph() {
-        let v1 = VertexMetadata::new(Some(1.0), 1, VertexType::Source);
+        let v1 = VertexMetadata::new(Some(1.0), 1, VertexType::VoltageSource);
         let v2 = VertexMetadata::new(Some(0.0), 2, VertexType::Sink);
 
         let e = EdgeMetadata::new(1, 2, EdgeType::new_component(2.0));
@@ -860,7 +997,7 @@ mod tests {
     /// ----------------
     /// ```
     fn create_simple_circuit() -> Circuit<f64> {
-        let source = VertexMetadata::new(Some(3.0), 0, VertexType::Source);
+        let source = VertexMetadata::new(Some(3.0), 0, VertexType::VoltageSource);
         let sink = VertexMetadata::new(Some(0.0), 1, VertexType::Sink);
 
         let edge = EdgeMetadata::new(0, 1, EdgeType::new_component(0.5));
@@ -877,7 +1014,7 @@ mod tests {
         let source = circuit
             .graph
             .node_weights()
-            .find(|v| v.vertex_type.is_source())
+            .find(|v| v.vertex_type.is_voltage_source())
             .unwrap();
         assert!(source.voltage.unwrap() == 3.0);
     }
@@ -943,7 +1080,7 @@ mod tests {
     /// ------------------------
     /// ```
     fn create_complex_circuit() -> Circuit<f64> {
-        let source = VertexMetadata::new(Some(2.0), 0, VertexType::Source);
+        let source = VertexMetadata::new(Some(2.0), 0, VertexType::VoltageSource);
 
         let v1 = VertexMetadata::new(None, 1, VertexType::Internal);
 
@@ -964,7 +1101,7 @@ mod tests {
         let source = circuit
             .graph
             .node_weights()
-            .find(|v| v.vertex_type.is_source())
+            .find(|v| v.vertex_type.is_voltage_source())
             .unwrap();
 
         assert_eq!(source.voltage.unwrap(), 2.0);
@@ -1062,7 +1199,7 @@ mod tests {
     /// ------------------------
     /// ```
     fn create_series_circuit() -> Circuit<f64> {
-        let source = VertexMetadata::new(Some(2.0), 0, VertexType::Source);
+        let source = VertexMetadata::new(Some(2.0), 0, VertexType::VoltageSource);
 
         let v1 = VertexMetadata::new(None, 1, VertexType::Internal);
         let v2 = VertexMetadata::new(None, 2, VertexType::Internal);
@@ -1186,8 +1323,8 @@ mod tests {
     fn create_multiple_source_circuit() -> Circuit<f64> {
         // Note that source0 represents the node at the very top left of the circuit,
         // and thus has the combined voltage of both the circuit's voltage sources.
-        let source0 = VertexMetadata::new(Some(5.0), 0, VertexType::Source);
-        let source1 = VertexMetadata::new(Some(2.0), 1, VertexType::Source);
+        let source0 = VertexMetadata::new(Some(5.0), 0, VertexType::VoltageSource);
+        let source1 = VertexMetadata::new(Some(2.0), 1, VertexType::VoltageSource);
 
         let v0 = VertexMetadata::new(None, 2, VertexType::Internal);
         let v1 = VertexMetadata::new(None, 3, VertexType::Internal);
@@ -1302,7 +1439,7 @@ mod tests {
     ///       2ohm
     /// ```
     fn create_ac_circuit() -> Circuit<c64> {
-        let source = VertexMetadata::new(Some(c64::new(4.0, 0.0)), 0, VertexType::Source);
+        let source = VertexMetadata::new(Some(c64::new(4.0, 0.0)), 0, VertexType::VoltageSource);
         let v1 = VertexMetadata::new(None, 1, VertexType::Internal);
         let v2 = VertexMetadata::new(None, 2, VertexType::Internal);
         let sink = VertexMetadata::new(Some(c64::faer_zero()), 3, VertexType::Sink);
@@ -1393,7 +1530,7 @@ mod tests {
     ///     1ohm           2ohm
     /// ```
     fn create_transformer_circuit() -> Circuit<c64> {
-        let source = VertexMetadata::new(Some(c64::new(6.0, 0.0)), 0, VertexType::Source);
+        let source = VertexMetadata::new(Some(c64::new(6.0, 0.0)), 0, VertexType::VoltageSource);
 
         let transformer = VertexMetadata::new(None, 1, VertexType::TransformerSecondary);
 
@@ -1529,7 +1666,7 @@ mod tests {
     /// ------------ ----------
     /// ```
     fn create_series_transformer_circuit() -> Circuit<f64> {
-        let source = VertexMetadata::new(Some(17.0), 0, VertexType::Source);
+        let source = VertexMetadata::new(Some(17.0), 0, VertexType::VoltageSource);
         let transformer0 = VertexMetadata::new(None, 1, VertexType::TransformerSecondary);
         let transformer1 = VertexMetadata::new(None, 2, VertexType::TransformerSecondary);
         let internal = VertexMetadata::new(None, 3, VertexType::Internal);
@@ -1611,7 +1748,7 @@ mod tests {
     /// ---------------------------
     /// ```
     fn create_parallel_transformer_circuit() -> Circuit<f64> {
-        let source = VertexMetadata::new(Some(8.0), 0, VertexType::Source);
+        let source = VertexMetadata::new(Some(8.0), 0, VertexType::VoltageSource);
 
         let transformer0 = VertexMetadata::new(None, 1, VertexType::TransformerSecondary);
         let transformer1 = VertexMetadata::new(None, 2, VertexType::TransformerSecondary);
@@ -1670,5 +1807,65 @@ mod tests {
         assert!(solved_voltages[3] - 0.0 < 1e-10);
         assert!(solved_voltages[4] - 0.0 < 1e-10);
         assert!(solved_voltages[5] - 0.0 < 1e-10);
+    }
+
+    #[test]
+    /// Set up a nontrvial circuit with a current-source only.
+    ///
+    /// ```notcode
+    ///         ┌──────┐                   
+    ///   ┌─────┤ 8Ω   ├──────┐            
+    ///   │     └──────┘      │            
+    ///   │                   │            
+    ///   │                   │            
+    ///   │     ┌──────┐      │            
+    ///   ├─────┤ 8Ω   ├──────┼────────┐   
+    ///   │     └──────┘      │        │   
+    ///   │                 ┌─┴─┐    ┌─┴─┐
+    /// ┌─▲─┐               │   │    │   │
+    /// │ │ │ 2A            │8Ω │    │8Ω │
+    /// └─┼─┘               │   │    │   │
+    ///   │                 └─┬─┘    └─┬─┘
+    ///   │                   │        │   
+    ///   └───────────────────┴────────┘   
+    /// ```
+    fn create_current_source_circuit() {
+        // Note that source0 represents the node at the very top left of the circuit,
+        // and thus has the combined voltage of both the circuit's voltage sources.
+        let source = VertexMetadata::new(None, 0, VertexType::CurrentSource);
+
+        let v0 = VertexMetadata::new(None, 1, VertexType::Internal);
+        let v1 = VertexMetadata::new(None, 2, VertexType::Internal);
+
+        let sink = VertexMetadata::new(Some(0f64), 3, VertexType::Sink);
+
+        let e0 = EdgeMetadata::new(0, 1, EdgeType::new_current_source(2f64));
+        let e1 = EdgeMetadata::new(1, 2, EdgeType::new_component(8f64));
+        let e2 = EdgeMetadata::new(1, 2, EdgeType::new_component(8f64));
+        let e3 = EdgeMetadata::new(2, 3, EdgeType::new_component(8f64));
+        let e4 = EdgeMetadata::new(2, 3, EdgeType::new_component(8f64));
+
+        let mut circuit = Circuit::new(vec![source, v0, v1, sink], vec![e0, e1, e2, e3, e4]);
+        circuit.solve_currents_and_voltages();
+
+        let solved_currents: Vec<f64> = circuit
+            .graph
+            .edge_weights()
+            .map(|e| e.current.unwrap())
+            .collect();
+
+        assert!((solved_currents[0] - 2f64).abs() < 1e-10);
+        assert!((solved_currents[1] - 1f64).abs() < 1e-10);
+        assert!((solved_currents[2] - 1f64).abs() < 1e-10);
+        assert!((solved_currents[3] - 1f64).abs() < 1e-10);
+        assert!((solved_currents[4] - 1f64).abs() < 1e-10);
+
+        let solved_voltages: Vec<Option<f64>> =
+            circuit.graph.node_weights().map(|e| e.voltage).collect();
+
+        assert!(solved_voltages[0].is_none());
+        assert!((solved_voltages[1].unwrap() - 0.25f64).abs() < 1e-10);
+        assert!((solved_voltages[2].unwrap() - 0.125f64).abs() < 1e-10);
+        assert!(solved_voltages[3].unwrap().abs() < 1e-10);
     }
 }
