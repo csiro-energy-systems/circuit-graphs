@@ -8,7 +8,7 @@ pub mod circuit_graph {
     use petgraph::prelude::*;
     use petgraph::visit::{EdgeRef, IntoNodeReferences};
 
-    #[derive(PartialEq, Eq, Debug)]
+    #[derive(PartialEq, Eq)]
     pub enum VertexType {
         CurrentSource,
         VoltageSource,
@@ -59,7 +59,6 @@ pub mod circuit_graph {
         }
     }
 
-    #[derive(Debug)]
     pub struct VertexMetadata<T> {
         pub voltage: Option<T>,
         pub tag: u32,
@@ -103,7 +102,6 @@ pub mod circuit_graph {
         }
     }
 
-    #[derive(Debug)]
     pub enum EdgeType<T> {
         FromCurrentSource {
             current: T,
@@ -158,7 +156,6 @@ pub mod circuit_graph {
     /// Edges may in particular represent the primary side of a transformer.
     /// Transformers are taken to be ideal in the current implementation, and do
     /// not take an admittance value.
-    #[derive(Debug)]
     pub struct EdgeMetadata<T> {
         pub tail: u32,
         pub head: u32,
@@ -244,7 +241,6 @@ pub mod circuit_graph {
     /// will work also for DC circuits or, in theory, purely resistive circuits.
     /// Complex admittance values should be in `G + jB` format; see the
     /// [`EdgeMetadata`] documentation for details.
-    #[derive(Debug)]
     pub struct Circuit<T> {
         pub graph: DiGraph<VertexMetadata<T>, EdgeMetadata<T>>,
     }
