@@ -103,9 +103,10 @@ pub mod circuit_graph {
     }
 
     pub enum EdgeType<T> {
-        FromCurrentSource {
+        CurrentSourceOutflowImpl {
             current: T,
         },
+        CurrentSourceOutflow,
         PassiveComponent {
             admittance: T,
         },
@@ -125,7 +126,7 @@ pub mod circuit_graph {
 
         /// Enable a new new Current Source
         pub fn new_current_source(current: T) -> Self {
-            Self::FromCurrentSource { current }
+            Self::CurrentSourceOutflowImpl { current }
         }
 
         /// Construct a new Transformer.
@@ -165,15 +166,17 @@ pub mod circuit_graph {
         edge_type: EdgeType<T>,
     }
 
-    impl<T: Copy> EdgeMetadata<T> {
+    impl<T> EdgeMetadata<T> {
         /// Constructs a new [`EdgeMetadata`] with the provided tail and head indices
         /// and admittance if applicable.
         ///
         /// See the [`EdgeMetadata`] documentation for details on admittance values.
         pub fn new(tail: u32, head: u32, edge_type: EdgeType<T>) -> Self {
-            let current = match edge_type {
-                EdgeType::FromCurrentSource { current } => Some(current),
-                _ => None,
+            let (current, edge_type) = match edge_type {
+                EdgeType::CurrentSourceOutflowImpl { current } => {
+                    (Some(current), EdgeType::CurrentSourceOutflow)
+                }
+                _ => (None, edge_type),
             };
             Self {
                 tail,
@@ -192,14 +195,14 @@ pub mod circuit_graph {
         /// outgoing edge from a [`CurrentSource`][curent_source] vertex.
         ///
         /// [transformer]: `EdgeType::Transformer`
-        /// [current_source]: `EdgeType::FromCurrentSource`
+        /// [current_source]: `EdgeType::CurrentSourceOutflow`
         pub fn get_admittance(&self) -> &T {
             match &self.edge_type {
                 EdgeType::PassiveComponent { admittance } => admittance,
                 EdgeType::Transformer { .. } => {
                     panic!("Attempted to get admittance of a transformer edge");
                 }
-                EdgeType::FromCurrentSource { .. } => {
+                EdgeType::CurrentSourceOutflowImpl { .. } | EdgeType::CurrentSourceOutflow => {
                     panic!("Attempted to get admittance for a current source");
                 }
             }
@@ -224,7 +227,7 @@ pub mod circuit_graph {
         ///
         /// [current_source]: `VertexType::CurrentSource`
         pub fn is_from_current_source(&self) -> bool {
-            matches!(self.edge_type, EdgeType::FromCurrentSource { .. })
+            matches!(self.edge_type, EdgeType::CurrentSourceOutflow { .. })
         }
     }
 
@@ -245,7 +248,7 @@ pub mod circuit_graph {
         pub graph: DiGraph<VertexMetadata<T>, EdgeMetadata<T>>,
     }
 
-    impl<T: Copy> Circuit<T> {
+    impl<T> Circuit<T> {
         /// Create a new circuit from a collection of vertices and edges.
         ///
         /// # Panics
@@ -371,12 +374,12 @@ pub mod circuit_graph {
             // increasing order.
             let mut current_sources: usize = 0;
             for edge_weight in self.graph.edge_weights_mut() {
-                match (edge_weight.current_id, edge_weight.current) {
-                    (None, None) => {
+                match (edge_weight.current_id, edge_weight.is_from_current_source()) {
+                    (None, false) => {
                         edge_weight.current_id = Some(next_current_index);
                         next_current_index += 1
                     }
-                    (_, Some(_)) => {
+                    (_, true) => {
                         current_sources += 1;
                     }
                     _ => (),
@@ -599,7 +602,8 @@ pub mod circuit_graph {
                                 );
                             };
                         }
-                        EdgeType::FromCurrentSource { .. } => (),
+                        EdgeType::CurrentSourceOutflowImpl { .. }
+                        | EdgeType::CurrentSourceOutflow => (),
                     }
                 }
             }
@@ -797,7 +801,7 @@ pub mod circuit_graph {
                             );
                         };
                     }
-                    EdgeType::FromCurrentSource { .. } => (),
+                    EdgeType::CurrentSourceOutflow | EdgeType::CurrentSourceOutflowImpl { .. } => {}
                 }
             }
 
@@ -882,7 +886,7 @@ pub mod circuit_graph {
 
                     Some(edge.current.unwrap() * (tail_voltage - head_voltage))
                 }
-                EdgeType::FromCurrentSource { .. } => None,
+                EdgeType::CurrentSourceOutflow | EdgeType::CurrentSourceOutflowImpl { .. } => None,
             };
 
             let edge = self.graph.edge_weight_mut(edge_index).unwrap();
@@ -1805,7 +1809,6 @@ mod tests {
         assert!(solved_voltages[5] - 0.0 < 1e-10);
     }
 
-    #[test]
     /// Set up a nontrvial circuit with a current-source only.
     ///
     /// ```notcode
@@ -1825,7 +1828,7 @@ mod tests {
     ///   │                   │        │   
     ///   └───────────────────┴────────┘   
     /// ```
-    fn create_current_source_circuit() {
+    fn create_current_source_00() -> Circuit<f64> {
         let source = VertexMetadata::new(None, 0, VertexType::CurrentSource);
 
         let v0 = VertexMetadata::new(None, 1, VertexType::Internal);
@@ -1839,7 +1842,12 @@ mod tests {
         let e3 = EdgeMetadata::new(2, 3, EdgeType::new_component(8f64));
         let e4 = EdgeMetadata::new(2, 3, EdgeType::new_component(8f64));
 
-        let mut circuit = Circuit::new(vec![source, v0, v1, sink], vec![e0, e1, e2, e3, e4]);
+        Circuit::new(vec![source, v0, v1, sink], vec![e0, e1, e2, e3, e4])
+    }
+
+    #[test]
+    fn test_current_source_00() {
+        let mut circuit = create_current_source_00();
         circuit.solve_currents_and_voltages();
 
         let solved_currents: Vec<f64> = circuit
