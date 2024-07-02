@@ -1,0 +1,23 @@
+# This CITATION.cff file was generated with cffinit.
+# Visit https://bit.ly/cffinit to generate yours today!
+
+cff-version: 1.2.0
+title: circuit-graphs
+message: "If you use this software, please cite it as below."
+type: software
+authors:
+  - given-names: Chris
+    family-names: Ktenidis
+    email: ktenidisc@gmail.com
+  - given-names: Matt
+    family-names: Shepit
+    email: matt.shepit@4c4f58.com
+repository-code: "https://github.com/csiro-energy-systems/circuit-graphs"
+abstract: >-
+  A (passive, steady-state) circuit analysis tool using a
+  graph representation. At present, it is possible to create
+  a circuit from a set of vertices and edges and solve for
+  the current through and voltage drop across each edge, the
+  voltage at each node relative to a sink node, and the
+  power drawn by each component.
+license: MIT
